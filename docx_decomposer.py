@@ -20,6 +20,14 @@ from typing import Dict, Any, List, Set, Tuple, Optional
 import json
 import difflib
 import re
+import html
+from arch_env_applier import apply_environment_to_target
+
+try:
+    from numbering_importer import import_numbering
+    HAS_NUMBERING_IMPORTER = True
+except ImportError:
+    HAS_NUMBERING_IMPORTER = False
 
 
 # -----------------------------------------------------------------------------
@@ -44,35 +52,45 @@ def _is_docx_package_part(rel_path: "Path") -> bool:
     return False
 
 
-PHASE2_MASTER_PROMPT = r"""
+PHASE2_MASTER_PROMPT = r'''
 You are a CSI STRUCTURE CLASSIFIER for AEC specifications.
 
-You will be given a slim JSON bundle of paragraphs from a mechanical or plumbing spec.
+You will be given:
+1. A slim JSON bundle of paragraphs from a mechanical or plumbing spec
+2. A list of AVAILABLE ROLES that the target architect template supports
 
 Your job:
-- Identify CSI semantic roles ONLY.
+- Classify paragraphs into CSI semantic roles
+- ONLY use roles from the available_roles list
+- If a paragraph's natural role is not in available_roles, use the closest parent role or omit it
 
-Allowed roles:
-- SectionID
-- SectionTitle
-- PART
-- ARTICLE
-- PARAGRAPH
-- SUBPARAGRAPH
-- SUBSUBPARAGRAPH
+CSI Hierarchy (for reference):
+- SectionID: Section number line (e.g., "SECTION 23 05 13")
+- SectionTitle: Section name line (e.g., "COMMON MOTOR REQUIREMENTS FOR HVAC EQUIPMENT")
+- PART: Part headings (PART 1, PART 2, PART 3)
+- ARTICLE: Article numbers (1.01, 2.03, etc.)
+- PARAGRAPH: Lettered paragraphs (A., B., C.)
+- SUBPARAGRAPH: Numbered under letters (1., 2., 3.)
+- SUBSUBPARAGRAPH: Lettered under numbers (a., b., c.)
+
+Fallback rules when a role is not available:
+- If SectionID not available but SectionTitle is -> classify section numbers as SectionTitle
+- If SUBSUBPARAGRAPH not available -> classify as SUBPARAGRAPH
+- If SUBPARAGRAPH not available -> classify as PARAGRAPH
+- When in doubt, omit the paragraph rather than misclassify
 
 Rules:
-- Do NOT create styles
+- Do NOT create new roles outside of available_roles
 - Do NOT reference formatting
 - Do NOT guess if unclear
 - If ambiguous, omit the paragraph
 
 Return JSON only.
-"""
+'''
 
-PHASE2_RUN_INSTRUCTION = r"""
+PHASE2_RUN_INSTRUCTION = r'''
 Task:
-Classify CSI roles for paragraphs.
+Classify CSI roles for paragraphs using ONLY the roles listed in available_roles.
 
 Output schema:
 {
@@ -81,7 +99,12 @@ Output schema:
   ],
   "notes": []
 }
-"""
+
+IMPORTANT:
+- Every csi_role value MUST be one of the strings in available_roles
+- If a paragraph doesn't fit any available role, omit it from classifications
+- Do not invent roles that aren't in available_roles
+'''
 
 
 
@@ -104,7 +127,7 @@ class DocxDecomposer:
         
         Args:
             output_dir: Directory to extract to. If None, creates a directory
-                       based on the docx filename.
+                    based on the docx filename.
         
         Returns:
             Path to the extraction directory
@@ -115,9 +138,26 @@ class DocxDecomposer:
         else:
             output_dir = Path(output_dir)
         
-        # Remove existing directory if it exists
+        # Remove existing directory if it exists (OneDrive-safe)
         if output_dir.exists():
-            shutil.rmtree(output_dir)
+            import time
+            import uuid
+            max_retries = 3
+            for attempt in range(max_retries):
+                try:
+                    shutil.rmtree(output_dir)
+                    break
+                except PermissionError as e:
+                    if attempt < max_retries - 1:
+                        print(f"Folder locked (OneDrive?), retrying in 2s... ({attempt + 1}/{max_retries})")
+                        time.sleep(2)
+                    else:
+                        # Last resort: rename instead of delete
+                        backup = output_dir.with_name(f"{output_dir.name}_old_{uuid.uuid4().hex[:8]}")
+                        print(f"Cannot delete {output_dir}, renaming to {backup}")
+                        output_dir.rename(backup)
+        
+        output_dir.mkdir(parents=True, exist_ok=True)
         
         # Extract the ZIP archive
         print(f"Extracting {self.docx_path} to {output_dir}...")
@@ -128,1026 +168,6 @@ class DocxDecomposer:
         print(f"Extraction complete: {len(list(output_dir.rglob('*')))} items extracted")
         return output_dir
     
-    def analyze_structure(self):
-        """
-        Analyze the extracted directory structure and generate a COMPLETE markdown report.
-        This goes to the atomic level - every file, every XML element, every attribute.
-        
-        Returns:
-            String containing the markdown report
-        """
-        if self.extract_dir is None:
-            raise ValueError("Must call extract() before analyze_structure()")
-        
-        self.markdown_report = []
-        
-        # Header
-        self._add_header()
-        
-        # Directory structure
-        self._add_directory_tree()
-        
-        # Complete file inventory
-        self._add_complete_file_inventory()
-        
-        # Content types - COMPLETE
-        self._add_content_types_complete()
-        
-        # All relationships - COMPLETE
-        self._add_all_relationships()
-        
-        # Document XML - COMPLETE breakdown
-        self._add_document_xml_complete()
-        
-        # Styles XML - COMPLETE
-        self._add_styles_xml_complete()
-        
-        # Settings XML - COMPLETE
-        self._add_settings_xml_complete()
-        
-        # Font table - COMPLETE
-        self._add_font_table_complete()
-        
-        # Numbering - COMPLETE
-        self._add_numbering_complete()
-        
-        # Theme - COMPLETE
-        self._add_theme_complete()
-        
-        # Document properties - COMPLETE
-        self._add_doc_properties_complete()
-        
-        # Custom XML - COMPLETE
-        self._add_custom_xml_complete()
-        
-        # Web settings - COMPLETE
-        self._add_web_settings_complete()
-        
-        # Any other XML files - COMPLETE
-        self._add_other_xml_files()
-        
-        # Binary files analysis
-        self._add_binary_files()
-        
-        # Raw XML dumps for all files
-        self._add_raw_xml_dumps()
-        
-        return "\n".join(self.markdown_report)
-    
-    def _add_header(self):
-        """Add markdown header."""
-        self.markdown_report.append(f"# Word Document Structure Analysis")
-        self.markdown_report.append(f"\n**Source Document:** `{self.docx_path.name}`")
-        self.markdown_report.append(f"**Analysis Date:** {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
-        self.markdown_report.append(f"**Extraction Directory:** `{self.extract_dir}`")
-        self.markdown_report.append("\n---\n")
-    
-    def _add_directory_tree(self):
-        """Add directory tree structure."""
-        self.markdown_report.append("## Directory Structure\n")
-        self.markdown_report.append("```")
-        self._print_tree(self.extract_dir, prefix="")
-        self.markdown_report.append("```\n")
-    
-    def _print_tree(self, directory, prefix="", is_last=True):
-        """Recursively print directory tree."""
-        items = sorted(directory.iterdir(), key=lambda x: (not x.is_dir(), x.name))
-        
-        for i, item in enumerate(items):
-            is_last_item = (i == len(items) - 1)
-            current_prefix = "└── " if is_last_item else "├── "
-            self.markdown_report.append(f"{prefix}{current_prefix}{item.name}")
-            
-            if item.is_dir():
-                extension = "    " if is_last_item else "│   "
-                self._print_tree(item, prefix + extension, is_last_item)
-    
-    def _add_complete_file_inventory(self):
-        """Complete inventory of every single file."""
-        self.markdown_report.append("## Complete File Inventory\n")
-        
-        all_files = sorted(self.extract_dir.rglob('*'))
-        
-        for file_path in all_files:
-            if file_path.is_file():
-                rel_path = file_path.relative_to(self.extract_dir)
-                size = file_path.stat().st_size
-                
-                # Determine file type
-                if file_path.suffix == '.xml':
-                    file_type = "XML Document"
-                elif file_path.suffix == '.rels':
-                    file_type = "Relationships"
-                elif file_path.suffix in ['.jpeg', '.jpg', '.png', '.gif']:
-                    file_type = "Image"
-                else:
-                    file_type = "Other"
-                
-                self.markdown_report.append(f"### `{rel_path}`")
-                self.markdown_report.append(f"- **Type:** {file_type}")
-                self.markdown_report.append(f"- **Size:** {size:,} bytes ({size/1024:.2f} KB)")
-                self.markdown_report.append("")
-    
-    def _parse_xml_with_namespaces(self, file_path):
-        """Parse XML and return tree with namespace mapping."""
-        tree = ET.parse(file_path)
-        root = tree.getroot()
-        
-        # Extract all namespaces
-        namespaces = {}
-        for event, elem in ET.iterparse(file_path, events=['start-ns']):
-            prefix, uri = elem
-            if prefix:
-                namespaces[prefix] = uri
-            else:
-                namespaces['default'] = uri
-        
-        return tree, root, namespaces
-    
-    def _element_to_dict(self, element, namespaces):
-        """Convert XML element to detailed dict representation."""
-        result = {
-            'tag': element.tag,
-            'attributes': dict(element.attrib),
-            'text': element.text.strip() if element.text and element.text.strip() else None,
-            'tail': element.tail.strip() if element.tail and element.tail.strip() else None,
-            'children': []
-        }
-        
-        for child in element:
-            result['children'].append(self._element_to_dict(child, namespaces))
-        
-        return result
-    
-    def _add_content_types_complete(self):
-        """COMPLETE analysis of content types."""
-        content_types_path = self.extract_dir / "[Content_Types].xml"
-        
-        if not content_types_path.exists():
-            return
-        
-        self.markdown_report.append("## [Content_Types].xml - COMPLETE ANALYSIS\n")
-        
-        try:
-            tree, root, namespaces = self._parse_xml_with_namespaces(content_types_path)
-            
-            self.markdown_report.append("### File Metadata")
-            self.markdown_report.append(f"- **Size:** {content_types_path.stat().st_size:,} bytes")
-            self.markdown_report.append(f"- **Root Element:** `{root.tag}`")
-            self.markdown_report.append(f"- **Namespaces:** {namespaces}")
-            self.markdown_report.append("")
-            
-            # Parse without namespace for easier reading
-            for elem in root.iter():
-                if '}' in elem.tag:
-                    elem.tag = elem.tag.split('}', 1)[1]
-            
-            defaults = root.findall('.//Default')
-            overrides = root.findall('.//Override')
-            
-            self.markdown_report.append(f"### Default Content Types ({len(defaults)} entries)\n")
-            for i, default in enumerate(defaults, 1):
-                ext = default.get('Extension')
-                content_type = default.get('ContentType')
-                self.markdown_report.append(f"{i}. **Extension:** `.{ext}`")
-                self.markdown_report.append(f"   - **Content-Type:** `{content_type}`")
-                self.markdown_report.append("")
-            
-            self.markdown_report.append(f"### Override Content Types ({len(overrides)} entries)\n")
-            for i, override in enumerate(overrides, 1):
-                part_name = override.get('PartName')
-                content_type = override.get('ContentType')
-                self.markdown_report.append(f"{i}. **Part:** `{part_name}`")
-                self.markdown_report.append(f"   - **Content-Type:** `{content_type}`")
-                self.markdown_report.append("")
-        
-        except Exception as e:
-            self.markdown_report.append(f"Error: {e}\n")
-    
-    def _add_all_relationships(self):
-        """COMPLETE analysis of ALL relationship files."""
-        self.markdown_report.append("## Relationships - COMPLETE ANALYSIS\n")
-        
-        # Find all .rels files
-        rels_files = list(self.extract_dir.rglob('*.rels'))
-        
-        for rels_file in sorted(rels_files):
-            rel_path = rels_file.relative_to(self.extract_dir)
-            self.markdown_report.append(f"### `{rel_path}`\n")
-            
-            try:
-                tree, root, namespaces = self._parse_xml_with_namespaces(rels_file)
-                
-                self.markdown_report.append(f"**File Size:** {rels_file.stat().st_size:,} bytes")
-                self.markdown_report.append(f"**Namespaces:** {namespaces}")
-                self.markdown_report.append("")
-                
-                # Remove namespace for easier parsing
-                for elem in root.iter():
-                    if '}' in elem.tag:
-                        elem.tag = elem.tag.split('}', 1)[1]
-                
-                relationships = root.findall('.//Relationship')
-                
-                self.markdown_report.append(f"**Total Relationships:** {len(relationships)}\n")
-                
-                for i, rel in enumerate(relationships, 1):
-                    rel_id = rel.get('Id')
-                    rel_type = rel.get('Type')
-                    target = rel.get('Target')
-                    target_mode = rel.get('TargetMode', 'Internal')
-                    
-                    self.markdown_report.append(f"{i}. **Relationship ID:** `{rel_id}`")
-                    self.markdown_report.append(f"   - **Type:** `{rel_type}`")
-                    self.markdown_report.append(f"   - **Target:** `{target}`")
-                    self.markdown_report.append(f"   - **Target Mode:** `{target_mode}`")
-                    self.markdown_report.append("")
-            
-            except Exception as e:
-                self.markdown_report.append(f"Error parsing: {e}\n")
-    
-    def _add_document_xml_complete(self):
-        """COMPLETE atomic-level analysis of document.xml."""
-        doc_path = self.extract_dir / "word" / "document.xml"
-        
-        if not doc_path.exists():
-            return
-        
-        self.markdown_report.append("## word/document.xml - COMPLETE ATOMIC ANALYSIS\n")
-        
-        try:
-            tree, root, namespaces = self._parse_xml_with_namespaces(doc_path)
-            
-            self.markdown_report.append("### File Metadata")
-            self.markdown_report.append(f"- **Size:** {doc_path.stat().st_size:,} bytes")
-            self.markdown_report.append(f"- **Root Element:** `{root.tag}`")
-            self.markdown_report.append(f"- **Namespaces:**")
-            for prefix, uri in namespaces.items():
-                self.markdown_report.append(f"  - `{prefix}`: `{uri}`")
-            self.markdown_report.append("")
-            
-            # Register all namespaces for xpath queries
-            for prefix, uri in namespaces.items():
-                if prefix != 'default':
-                    ET.register_namespace(prefix, uri)
-            
-            # Use the actual namespace prefixes
-            w_ns = namespaces.get('w', 'http://schemas.openxmlformats.org/wordprocessingml/2006/main')
-            ns = {'w': w_ns}
-            
-            # Get all major elements
-            body = root.find('.//w:body', ns)
-            paragraphs = root.findall('.//w:p', ns)
-            tables = root.findall('.//w:tbl', ns)
-            sections = root.findall('.//w:sectPr', ns)
-            
-            self.markdown_report.append("### Document Structure Overview")
-            self.markdown_report.append(f"- **Body Element Present:** {'Yes' if body is not None else 'No'}")
-            self.markdown_report.append(f"- **Total Paragraphs:** {len(paragraphs)}")
-            self.markdown_report.append(f"- **Total Tables:** {len(tables)}")
-            self.markdown_report.append(f"- **Total Sections:** {len(sections)}")
-            self.markdown_report.append("")
-            
-            # Detailed paragraph analysis
-            self.markdown_report.append(f"### Detailed Paragraph Analysis ({len(paragraphs)} paragraphs)\n")
-            
-            for i, para in enumerate(paragraphs, 1):
-                self.markdown_report.append(f"#### Paragraph {i}\n")
-                
-                # Paragraph properties
-                pPr = para.find('w:pPr', ns)
-                if pPr is not None:
-                    self.markdown_report.append("**Paragraph Properties:**")
-                    for prop in pPr:
-                        tag_name = prop.tag.split('}')[-1] if '}' in prop.tag else prop.tag
-                        attrs = ', '.join([f"{k}={v}" for k, v in prop.attrib.items()])
-                        self.markdown_report.append(f"- `{tag_name}` {f'({attrs})' if attrs else ''}")
-                    self.markdown_report.append("")
-                
-                # Runs analysis
-                runs = para.findall('w:r', ns)
-                self.markdown_report.append(f"**Runs:** {len(runs)}")
-                
-                for j, run in enumerate(runs, 1):
-                    self.markdown_report.append(f"\n**Run {j}:**")
-                    
-                    # Run properties
-                    rPr = run.find('w:rPr', ns)
-                    if rPr is not None:
-                        self.markdown_report.append("- Properties:")
-                        for prop in rPr:
-                            tag_name = prop.tag.split('}')[-1] if '}' in prop.tag else prop.tag
-                            attrs = ', '.join([f"{k}={v}" for k, v in prop.attrib.items()])
-                            self.markdown_report.append(f"  - `{tag_name}` {f'({attrs})' if attrs else ''}")
-                    
-                    # Text content
-                    texts = run.findall('w:t', ns)
-                    for t in texts:
-                        if t.text:
-                            space_attr = t.get('{http://www.w3.org/XML/1998/namespace}space', '')
-                            self.markdown_report.append(f"- Text: `{t.text}`")
-                            if space_attr:
-                                self.markdown_report.append(f"  - xml:space: `{space_attr}`")
-                
-                self.markdown_report.append("")
-            
-            # Detailed table analysis
-            if tables:
-                self.markdown_report.append(f"### Detailed Table Analysis ({len(tables)} tables)\n")
-                
-                for i, table in enumerate(tables, 1):
-                    self.markdown_report.append(f"#### Table {i}\n")
-                    
-                    # Table properties
-                    tblPr = table.find('w:tblPr', ns)
-                    if tblPr is not None:
-                        self.markdown_report.append("**Table Properties:**")
-                        for prop in tblPr:
-                            tag_name = prop.tag.split('}')[-1] if '}' in prop.tag else prop.tag
-                            attrs = ', '.join([f"{k}={v}" for k, v in prop.attrib.items()])
-                            self.markdown_report.append(f"- `{tag_name}` {f'({attrs})' if attrs else ''}")
-                        self.markdown_report.append("")
-                    
-                    # Table grid
-                    tblGrid = table.find('w:tblGrid', ns)
-                    if tblGrid is not None:
-                        grid_cols = tblGrid.findall('w:gridCol', ns)
-                        self.markdown_report.append(f"**Table Grid:** {len(grid_cols)} columns")
-                        for k, col in enumerate(grid_cols, 1):
-                            width = col.get(f'{{{w_ns}}}w', 'auto')
-                            self.markdown_report.append(f"- Column {k}: width = `{width}`")
-                        self.markdown_report.append("")
-                    
-                    # Rows
-                    rows = table.findall('w:tr', ns)
-                    self.markdown_report.append(f"**Rows:** {len(rows)}\n")
-                    
-                    for r_idx, row in enumerate(rows, 1):
-                        cells = row.findall('w:tc', ns)
-                        self.markdown_report.append(f"**Row {r_idx}:** {len(cells)} cells")
-                        
-                        for c_idx, cell in enumerate(cells, 1):
-                            # Cell properties
-                            tcPr = cell.find('w:tcPr', ns)
-                            cell_props = []
-                            if tcPr is not None:
-                                for prop in tcPr:
-                                    tag_name = prop.tag.split('}')[-1] if '}' in prop.tag else prop.tag
-                                    cell_props.append(tag_name)
-                            
-                            # Cell text
-                            cell_paras = cell.findall('w:p', ns)
-                            cell_text = []
-                            for cp in cell_paras:
-                                texts = cp.findall('.//w:t', ns)
-                                para_text = ''.join([t.text for t in texts if t.text])
-                                if para_text:
-                                    cell_text.append(para_text)
-                            
-                            self.markdown_report.append(f"  - Cell {c_idx}: {', '.join(cell_props) if cell_props else 'no special properties'}")
-                            if cell_text:
-                                self.markdown_report.append(f"    - Text: `{' '.join(cell_text)}`")
-                        
-                        self.markdown_report.append("")
-            
-            # Section properties
-            if sections:
-                self.markdown_report.append(f"### Section Properties ({len(sections)} sections)\n")
-                
-                for i, section in enumerate(sections, 1):
-                    self.markdown_report.append(f"#### Section {i}\n")
-                    
-                    for prop in section:
-                        tag_name = prop.tag.split('}')[-1] if '}' in prop.tag else prop.tag
-                        attrs = dict(prop.attrib)
-                        
-                        self.markdown_report.append(f"**{tag_name}:**")
-                        if attrs:
-                            for k, v in attrs.items():
-                                attr_name = k.split('}')[-1] if '}' in k else k
-                                self.markdown_report.append(f"- {attr_name}: `{v}`")
-                        
-                        # Check for child elements
-                        if len(prop) > 0:
-                            self.markdown_report.append("- Child elements:")
-                            for child in prop:
-                                child_name = child.tag.split('}')[-1] if '}' in child.tag else child.tag
-                                child_attrs = ', '.join([f"{k.split('}')[-1]}={v}" for k, v in child.attrib.items()])
-                                self.markdown_report.append(f"  - `{child_name}` {f'({child_attrs})' if child_attrs else ''}")
-                        
-                        self.markdown_report.append("")
-        
-        except Exception as e:
-            self.markdown_report.append(f"Error: {e}\n")
-            import traceback
-            self.markdown_report.append(f"```\n{traceback.format_exc()}\n```\n")
-    
-    def _add_styles_xml_complete(self):
-        """COMPLETE analysis of styles.xml."""
-        styles_path = self.extract_dir / "word" / "styles.xml"
-        
-        if not styles_path.exists():
-            return
-        
-        self.markdown_report.append("## word/styles.xml - COMPLETE ANALYSIS\n")
-        
-        try:
-            tree, root, namespaces = self._parse_xml_with_namespaces(styles_path)
-            
-            self.markdown_report.append("### File Metadata")
-            self.markdown_report.append(f"- **Size:** {styles_path.stat().st_size:,} bytes")
-            self.markdown_report.append("")
-            
-            w_ns = namespaces.get('w', 'http://schemas.openxmlformats.org/wordprocessingml/2006/main')
-            ns = {'w': w_ns}
-            
-            # Get all styles
-            styles = root.findall('.//w:style', ns)
-            
-            self.markdown_report.append(f"### Total Styles: {len(styles)}\n")
-            
-            for i, style in enumerate(styles, 1):
-                style_type = style.get(f'{{{w_ns}}}type', 'unknown')
-                style_id = style.get(f'{{{w_ns}}}styleId', 'unknown')
-                default = style.get(f'{{{w_ns}}}default', '0')
-                custom_style = style.get(f'{{{w_ns}}}customStyle', '0')
-                
-                self.markdown_report.append(f"#### Style {i}: `{style_id}`\n")
-                self.markdown_report.append(f"- **Type:** `{style_type}`")
-                self.markdown_report.append(f"- **Default:** `{default}`")
-                self.markdown_report.append(f"- **Custom:** `{custom_style}`")
-                
-                # Style name
-                name_elem = style.find('w:name', ns)
-                if name_elem is not None:
-                    self.markdown_report.append(f"- **Name:** `{name_elem.get(f'{{{w_ns}}}val', 'N/A')}`")
-                
-                # Based on
-                based_on = style.find('w:basedOn', ns)
-                if based_on is not None:
-                    self.markdown_report.append(f"- **Based On:** `{based_on.get(f'{{{w_ns}}}val', 'N/A')}`")
-                
-                # Next style
-                next_style = style.find('w:next', ns)
-                if next_style is not None:
-                    self.markdown_report.append(f"- **Next:** `{next_style.get(f'{{{w_ns}}}val', 'N/A')}`")
-                
-                # UI Priority
-                ui_priority = style.find('w:uiPriority', ns)
-                if ui_priority is not None:
-                    self.markdown_report.append(f"- **UI Priority:** `{ui_priority.get(f'{{{w_ns}}}val', 'N/A')}`")
-                
-                # Properties
-                self.markdown_report.append("\n**Properties:**")
-                for child in style:
-                    tag_name = child.tag.split('}')[-1] if '}' in child.tag else child.tag
-                    if tag_name not in ['name', 'basedOn', 'next', 'uiPriority']:
-                        attrs = ', '.join([f"{k.split('}')[-1]}={v}" for k, v in child.attrib.items()])
-                        self.markdown_report.append(f"- `{tag_name}` {f'({attrs})' if attrs else ''}")
-                
-                self.markdown_report.append("")
-        
-        except Exception as e:
-            self.markdown_report.append(f"Error: {e}\n")
-    
-    def _add_settings_xml_complete(self):
-        """COMPLETE analysis of settings.xml."""
-        settings_path = self.extract_dir / "word" / "settings.xml"
-        
-        if not settings_path.exists():
-            return
-        
-        self.markdown_report.append("## word/settings.xml - COMPLETE ANALYSIS\n")
-        
-        try:
-            tree, root, namespaces = self._parse_xml_with_namespaces(settings_path)
-            
-            self.markdown_report.append("### File Metadata")
-            self.markdown_report.append(f"- **Size:** {settings_path.stat().st_size:,} bytes")
-            self.markdown_report.append("")
-            
-            self.markdown_report.append("### All Settings\n")
-            
-            for child in root:
-                tag_name = child.tag.split('}')[-1] if '}' in child.tag else child.tag
-                attrs = dict(child.attrib)
-                
-                self.markdown_report.append(f"**{tag_name}:**")
-                
-                if attrs:
-                    for k, v in attrs.items():
-                        attr_name = k.split('}')[-1] if '}' in k else k
-                        self.markdown_report.append(f"- {attr_name}: `{v}`")
-                
-                if child.text and child.text.strip():
-                    self.markdown_report.append(f"- Text: `{child.text.strip()}`")
-                
-                if len(child) > 0:
-                    self.markdown_report.append("- Child elements:")
-                    for subchild in child:
-                        subchild_name = subchild.tag.split('}')[-1] if '}' in subchild.tag else subchild.tag
-                        subchild_attrs = ', '.join([f"{k.split('}')[-1]}={v}" for k, v in subchild.attrib.items()])
-                        self.markdown_report.append(f"  - `{subchild_name}` {f'({subchild_attrs})' if subchild_attrs else ''}")
-                
-                self.markdown_report.append("")
-        
-        except Exception as e:
-            self.markdown_report.append(f"Error: {e}\n")
-    
-    def _add_font_table_complete(self):
-        """COMPLETE analysis of fontTable.xml."""
-        font_path = self.extract_dir / "word" / "fontTable.xml"
-        
-        if not font_path.exists():
-            return
-        
-        self.markdown_report.append("## word/fontTable.xml - COMPLETE ANALYSIS\n")
-        
-        try:
-            tree, root, namespaces = self._parse_xml_with_namespaces(font_path)
-            
-            self.markdown_report.append("### File Metadata")
-            self.markdown_report.append(f"- **Size:** {font_path.stat().st_size:,} bytes")
-            self.markdown_report.append("")
-            
-            w_ns = namespaces.get('w', 'http://schemas.openxmlformats.org/wordprocessingml/2006/main')
-            ns = {'w': w_ns}
-            
-            fonts = root.findall('.//w:font', ns)
-            
-            self.markdown_report.append(f"### Total Fonts: {len(fonts)}\n")
-            
-            for i, font in enumerate(fonts, 1):
-                font_name = font.get(f'{{{w_ns}}}name', 'unknown')
-                
-                self.markdown_report.append(f"#### Font {i}: `{font_name}`\n")
-                
-                for child in font:
-                    tag_name = child.tag.split('}')[-1] if '}' in child.tag else child.tag
-                    attrs = ', '.join([f"{k.split('}')[-1]}={v}" for k, v in child.attrib.items()])
-                    self.markdown_report.append(f"- **{tag_name}:** {attrs if attrs else '(no attributes)'}")
-                
-                self.markdown_report.append("")
-        
-        except Exception as e:
-            self.markdown_report.append(f"Error: {e}\n")
-    
-    def _add_numbering_complete(self):
-        """COMPLETE analysis of numbering.xml."""
-        numbering_path = self.extract_dir / "word" / "numbering.xml"
-        
-        if not numbering_path.exists():
-            return
-        
-        self.markdown_report.append("## word/numbering.xml - COMPLETE ANALYSIS\n")
-        
-        try:
-            tree, root, namespaces = self._parse_xml_with_namespaces(numbering_path)
-            
-            self.markdown_report.append("### File Metadata")
-            self.markdown_report.append(f"- **Size:** {numbering_path.stat().st_size:,} bytes")
-            self.markdown_report.append("")
-            
-            w_ns = namespaces.get('w', 'http://schemas.openxmlformats.org/wordprocessingml/2006/main')
-            ns = {'w': w_ns}
-            
-            abstract_nums = root.findall('.//w:abstractNum', ns)
-            num_defs = root.findall('.//w:num', ns)
-            
-            self.markdown_report.append(f"### Abstract Numbering Definitions: {len(abstract_nums)}\n")
-            
-            for i, abs_num in enumerate(abstract_nums, 1):
-                abs_num_id = abs_num.get(f'{{{w_ns}}}abstractNumId', 'unknown')
-                
-                self.markdown_report.append(f"#### Abstract Num {i} (ID: {abs_num_id})\n")
-                
-                for child in abs_num:
-                    tag_name = child.tag.split('}')[-1] if '}' in child.tag else child.tag
-                    self.markdown_report.append(f"**{tag_name}:**")
-                    
-                    for k, v in child.attrib.items():
-                        attr_name = k.split('}')[-1] if '}' in k else k
-                        self.markdown_report.append(f"- {attr_name}: `{v}`")
-                    
-                    if len(child) > 0:
-                        for subchild in child:
-                            subchild_name = subchild.tag.split('}')[-1] if '}' in subchild.tag else subchild.tag
-                            subchild_attrs = ', '.join([f"{k.split('}')[-1]}={v}" for k, v in subchild.attrib.items()])
-                            self.markdown_report.append(f"  - `{subchild_name}` {f'({subchild_attrs})' if subchild_attrs else ''}")
-                    
-                    self.markdown_report.append("")
-            
-            self.markdown_report.append(f"### Numbering Instances: {len(num_defs)}\n")
-            
-            for i, num in enumerate(num_defs, 1):
-                num_id = num.get(f'{{{w_ns}}}numId', 'unknown')
-                
-                self.markdown_report.append(f"#### Numbering {i} (ID: {num_id})\n")
-                
-                abstract_num_id = num.find('w:abstractNumId', ns)
-                if abstract_num_id is not None:
-                    self.markdown_report.append(f"- **References Abstract Num:** `{abstract_num_id.get(f'{{{w_ns}}}val', 'N/A')}`")
-                
-                self.markdown_report.append("")
-        
-        except Exception as e:
-            self.markdown_report.append(f"Error: {e}\n")
-    
-    def _add_theme_complete(self):
-        """COMPLETE analysis of theme files."""
-        theme_dir = self.extract_dir / "word" / "theme"
-        
-        if not theme_dir.exists():
-            return
-        
-        self.markdown_report.append("## word/theme/ - COMPLETE ANALYSIS\n")
-        
-        theme_files = list(theme_dir.glob('*.xml'))
-        
-        for theme_file in sorted(theme_files):
-            rel_path = theme_file.relative_to(self.extract_dir)
-            self.markdown_report.append(f"### `{rel_path}`\n")
-            
-            try:
-                tree, root, namespaces = self._parse_xml_with_namespaces(theme_file)
-                
-                self.markdown_report.append(f"**Size:** {theme_file.stat().st_size:,} bytes")
-                self.markdown_report.append(f"**Root Element:** `{root.tag}`")
-                self.markdown_report.append("")
-                
-                # Recursively document all elements
-                self._document_element_recursive(root, 0)
-                
-                self.markdown_report.append("")
-            
-            except Exception as e:
-                self.markdown_report.append(f"Error: {e}\n")
-    
-    def _document_element_recursive(self, element, depth, max_depth=5):
-        """Recursively document an XML element and its children."""
-        if depth > max_depth:
-            return
-        
-        indent = "  " * depth
-        tag_name = element.tag.split('}')[-1] if '}' in element.tag else element.tag
-        attrs = ', '.join([f"{k.split('}')[-1]}={v}" for k, v in element.attrib.items()])
-        
-        self.markdown_report.append(f"{indent}- **{tag_name}** {f'({attrs})' if attrs else ''}")
-        
-        if element.text and element.text.strip():
-            self.markdown_report.append(f"{indent}  - Text: `{element.text.strip()[:100]}`")
-        
-        for child in element:
-            self._document_element_recursive(child, depth + 1, max_depth)
-    
-    def _add_doc_properties_complete(self):
-        """COMPLETE analysis of document properties."""
-        self.markdown_report.append("## Document Properties - COMPLETE ANALYSIS\n")
-        
-        # Core properties
-        core_path = self.extract_dir / "docProps" / "core.xml"
-        if core_path.exists():
-            self.markdown_report.append("### docProps/core.xml\n")
-            
-            try:
-                tree, root, namespaces = self._parse_xml_with_namespaces(core_path)
-                
-                self.markdown_report.append(f"**Size:** {core_path.stat().st_size:,} bytes")
-                self.markdown_report.append("")
-                
-                for child in root:
-                    tag_name = child.tag.split('}')[-1] if '}' in child.tag else child.tag
-                    text = child.text.strip() if child.text else 'N/A'
-                    attrs = ', '.join([f"{k.split('}')[-1]}={v}" for k, v in child.attrib.items()])
-                    
-                    self.markdown_report.append(f"**{tag_name}:** `{text}` {f'({attrs})' if attrs else ''}")
-                
-                self.markdown_report.append("")
-            
-            except Exception as e:
-                self.markdown_report.append(f"Error: {e}\n")
-        
-        # App properties
-        app_path = self.extract_dir / "docProps" / "app.xml"
-        if app_path.exists():
-            self.markdown_report.append("### docProps/app.xml\n")
-            
-            try:
-                tree, root, namespaces = self._parse_xml_with_namespaces(app_path)
-                
-                self.markdown_report.append(f"**Size:** {app_path.stat().st_size:,} bytes")
-                self.markdown_report.append("")
-                
-                for child in root:
-                    tag_name = child.tag.split('}')[-1] if '}' in child.tag else child.tag
-                    text = child.text.strip() if child.text else 'N/A'
-                    
-                    self.markdown_report.append(f"**{tag_name}:** `{text}`")
-                
-                self.markdown_report.append("")
-            
-            except Exception as e:
-                self.markdown_report.append(f"Error: {e}\n")
-    
-    def _add_custom_xml_complete(self):
-        """COMPLETE analysis of custom XML."""
-        custom_dir = self.extract_dir / "customXml"
-        
-        if not custom_dir.exists():
-            return
-        
-        self.markdown_report.append("## customXml/ - COMPLETE ANALYSIS\n")
-        
-        xml_files = list(custom_dir.glob('*.xml'))
-        
-        for xml_file in sorted(xml_files):
-            rel_path = xml_file.relative_to(self.extract_dir)
-            self.markdown_report.append(f"### `{rel_path}`\n")
-            
-            try:
-                tree, root, namespaces = self._parse_xml_with_namespaces(xml_file)
-                
-                self.markdown_report.append(f"**Size:** {xml_file.stat().st_size:,} bytes")
-                self.markdown_report.append(f"**Root Element:** `{root.tag}`")
-                self.markdown_report.append("")
-                
-                self._document_element_recursive(root, 0, max_depth=10)
-                
-                self.markdown_report.append("")
-            
-            except Exception as e:
-                self.markdown_report.append(f"Error: {e}\n")
-    
-    def _add_web_settings_complete(self):
-        """COMPLETE analysis of webSettings.xml."""
-        web_path = self.extract_dir / "word" / "webSettings.xml"
-        
-        if not web_path.exists():
-            return
-        
-        self.markdown_report.append("## word/webSettings.xml - COMPLETE ANALYSIS\n")
-        
-        try:
-            tree, root, namespaces = self._parse_xml_with_namespaces(web_path)
-            
-            self.markdown_report.append(f"**Size:** {web_path.stat().st_size:,} bytes")
-            self.markdown_report.append("")
-            
-            for child in root:
-                tag_name = child.tag.split('}')[-1] if '}' in child.tag else child.tag
-                attrs = ', '.join([f"{k.split('}')[-1]}={v}" for k, v in child.attrib.items()])
-                
-                self.markdown_report.append(f"**{tag_name}:** {attrs if attrs else '(no attributes)'}")
-            
-            self.markdown_report.append("")
-        
-        except Exception as e:
-            self.markdown_report.append(f"Error: {e}\n")
-    
-    def _add_other_xml_files(self):
-        """Analyze any other XML files not covered."""
-        self.markdown_report.append("## Other XML Files - COMPLETE ANALYSIS\n")
-        
-        covered_files = {
-            'document.xml', 'styles.xml', 'settings.xml', 'fontTable.xml',
-            'numbering.xml', 'webSettings.xml', 'stylesWithEffects.xml',
-            'core.xml', 'app.xml', '[Content_Types].xml'
-        }
-        
-        all_xml = list(self.extract_dir.rglob('*.xml'))
-        other_xml = [f for f in all_xml if f.name not in covered_files and 'theme' not in str(f) and 'customXml' not in str(f)]
-        
-        if not other_xml:
-            self.markdown_report.append("No other XML files found.\n")
-            return
-        
-        for xml_file in sorted(other_xml):
-            rel_path = xml_file.relative_to(self.extract_dir)
-            self.markdown_report.append(f"### `{rel_path}`\n")
-            
-            try:
-                tree, root, namespaces = self._parse_xml_with_namespaces(xml_file)
-                
-                self.markdown_report.append(f"**Size:** {xml_file.stat().st_size:,} bytes")
-                self.markdown_report.append(f"**Root Element:** `{root.tag}`")
-                self.markdown_report.append(f"**Namespaces:** {namespaces}")
-                self.markdown_report.append("")
-                
-                self._document_element_recursive(root, 0, max_depth=10)
-                
-                self.markdown_report.append("")
-            
-            except Exception as e:
-                self.markdown_report.append(f"Error: {e}\n")
-    
-    def _add_binary_files(self):
-        """Analyze binary files (images, etc.)."""
-        self.markdown_report.append("## Binary Files Analysis\n")
-        
-        binary_extensions = {'.jpeg', '.jpg', '.png', '.gif', '.bmp', '.tiff', '.emf', '.wmf'}
-        all_files = list(self.extract_dir.rglob('*'))
-        binary_files = [f for f in all_files if f.is_file() and f.suffix.lower() in binary_extensions]
-        
-        if not binary_files:
-            self.markdown_report.append("No binary files found.\n")
-            return
-        
-        for bin_file in sorted(binary_files):
-            rel_path = bin_file.relative_to(self.extract_dir)
-            size = bin_file.stat().st_size
-            
-            self.markdown_report.append(f"### `{rel_path}`")
-            self.markdown_report.append(f"- **Type:** {bin_file.suffix.upper()}")
-            self.markdown_report.append(f"- **Size:** {size:,} bytes ({size/1024:.2f} KB)")
-            
-            # Read file signature (magic bytes)
-            with open(bin_file, 'rb') as f:
-                magic = f.read(16)
-                hex_magic = ' '.join([f'{b:02x}' for b in magic])
-                self.markdown_report.append(f"- **Magic Bytes:** `{hex_magic}`")
-            
-            self.markdown_report.append("")
-    
-    def _add_raw_xml_dumps(self):
-        """Add complete raw XML dumps for all XML files."""
-        self.markdown_report.append("## RAW XML DUMPS\n")
-        self.markdown_report.append("Complete, unprocessed XML content for every XML file.\n")
-        
-        all_xml = sorted(self.extract_dir.rglob('*.xml'))
-        
-        for xml_file in all_xml:
-            rel_path = xml_file.relative_to(self.extract_dir)
-            self.markdown_report.append(f"### `{rel_path}` - RAW XML\n")
-            
-            try:
-                with open(xml_file, 'r', encoding='utf-8') as f:
-                    content = f.read()
-                
-                self.markdown_report.append("```xml")
-                self.markdown_report.append(content)
-                self.markdown_report.append("```\n")
-            
-            except Exception as e:
-                self.markdown_report.append(f"Error reading file: {e}\n")
-    
-    def save_analysis(self, output_path=None):
-        """
-        Save the markdown analysis to a file.
-        
-        Args:
-            output_path: Path to save the markdown file. If None, uses default name.
-        
-        Returns:
-            Path to the saved markdown file
-        """
-        if not self.markdown_report:
-            self.analyze_structure()
-        
-        if output_path is None:
-            output_path = self.extract_dir.parent / f"{self.extract_dir.name}_analysis.md"
-        else:
-            output_path = Path(output_path)
-        
-        with open(output_path, 'w', encoding='utf-8') as f:
-            f.write("\n".join(self.markdown_report))
-        
-        print(f"Analysis saved to: {output_path}")
-        return output_path
-    
-    def reconstruct(self, output_path=None):
-        """
-        Reconstruct the .docx file from the extracted components.
-        
-        Args:
-            output_path: Path for the reconstructed .docx file. If None, uses default name.
-        
-        Returns:
-            Path to the reconstructed .docx file
-        """
-        if self.extract_dir is None:
-            raise ValueError("Must call extract() before reconstruct()")
-        
-        if output_path is None:
-            output_path = self.extract_dir.parent / f"{self.extract_dir.name}_reconstructed.docx"
-        else:
-            output_path = Path(output_path)
-        
-        print(f"Reconstructing document from {self.extract_dir}...")
-        
-        # Create a new ZIP file
-        with zipfile.ZipFile(output_path, 'w', zipfile.ZIP_DEFLATED) as docx:
-            for file_path in self.extract_dir.rglob("*"):
-                if not file_path.is_file():
-                    continue
-
-                rel_path = file_path.relative_to(self.extract_dir)
-
-                # Only include legitimate DOCX parts
-                if not _is_docx_package_part(rel_path):
-                    continue
-
-                # Force forward slashes inside the ZIP (Word expects this)
-                docx.write(file_path, arcname=rel_path.as_posix())
-
-
-        print(f"Reconstruction complete: {output_path}")
-        return output_path
-
-
-    def write_normalize_bundle(self, bundle_path=None, prompts_dir=None):
-        """
-        Create a focused bundle for LLM editing and write prompts to disk.
-        Produces:
-          - bundle.json (editable + read_only xml + sha256)
-          - prompts/master_prompt.txt
-          - prompts/run_instruction.txt
-        """
-        if self.extract_dir is None:
-            raise ValueError("Must call extract() before write_normalize_bundle()")
-
-        if bundle_path is None:
-            bundle_path = self.extract_dir / "bundle.json"
-        else:
-            bundle_path = Path(bundle_path)
-
-        if prompts_dir is None:
-            prompts_dir = self.extract_dir / "prompts"
-        else:
-            prompts_dir = Path(prompts_dir)
-
-        prompts_dir.mkdir(parents=True, exist_ok=True)
-
-        bundle = build_llm_bundle(self.extract_dir)
-
-        bundle_path.write_text(json.dumps(bundle, indent=2), encoding="utf-8")
-        (prompts_dir / "master_prompt.txt").write_text(MASTER_PROMPT, encoding="utf-8")
-        (prompts_dir / "run_instruction.txt").write_text(RUN_INSTRUCTION_DEFAULT, encoding="utf-8")
-
-        print(f"Normalize bundle written: {bundle_path}")
-        print(f"Prompts written in: {prompts_dir}")
-        return bundle_path, prompts_dir
-
-    def apply_edits_and_rebuild(self, edits_json_path, output_docx_path=None):
-        """
-        Apply LLM edits, verify stability (headers/footers + sectPr), then rebuild docx.
-        Emits diffs under extract_dir/patches by default.
-        """
-        if self.extract_dir is None:
-            raise ValueError("Must call extract() before apply_edits_and_rebuild()")
-
-        edits_json_path = Path(edits_json_path)
-        if not edits_json_path.exists():
-            raise FileNotFoundError(f"Edits JSON not found: {edits_json_path}")
-
-        # Take stability snapshot BEFORE applying edits
-        snap = snapshot_stability(self.extract_dir)
-
-        # Load edits JSON
-        edits = json.loads(edits_json_path.read_text(encoding="utf-8"))
-
-        # Apply edits + write diffs
-        patches_dir = self.extract_dir / "patches"
-        apply_llm_edits(self.extract_dir, edits, patches_dir)
-
-        # Verify stability AFTER applying edits
-        verify_stability(self.extract_dir, snap)
-
-        # Rebuild docx
-        return self.reconstruct(output_path=output_docx_path)
-
-    def write_slim_normalize_bundle(self, output_path=None):
-        if self.extract_dir is None:
-            raise ValueError("Must call extract() before write_slim_normalize_bundle()")
-
-        if output_path is None:
-            output_path = self.extract_dir / "slim_bundle.json"
-        else:
-            output_path = Path(output_path)
-
-        prompts_dir = self.extract_dir / "prompts_slim"
-        prompts_dir.mkdir(parents=True, exist_ok=True)
-
-        bundle = build_slim_bundle(self.extract_dir)
-        output_path.write_text(json.dumps(bundle, indent=2), encoding="utf-8")
-
-        (prompts_dir / "master_prompt.txt").write_text(SLIM_MASTER_PROMPT, encoding="utf-8")
-        (prompts_dir / "run_instruction.txt").write_text(SLIM_RUN_INSTRUCTION_DEFAULT, encoding="utf-8")
-
-        print(f"Slim bundle written: {output_path}")
-        print(f"Slim prompts written: {prompts_dir}")
-        return output_path, prompts_dir
-
-    def apply_instructions_and_rebuild(self, instructions_json_path, output_docx_path=None):
-        if self.extract_dir is None:
-            raise ValueError("Must call extract() before apply_instructions_and_rebuild()")
-
-        instructions_json_path = Path(instructions_json_path)
-        instructions = json.loads(instructions_json_path.read_text(encoding="utf-8"))
-
-        apply_instructions(self.extract_dir, instructions)
-        return self.reconstruct(output_path=output_docx_path)
-
-
 
 def main():
     import argparse
@@ -1184,11 +204,7 @@ def main():
         help="(debug) write analysis.md"
     )
 
-    # Legacy args still accepted but *disabled*
-    parser.add_argument("--normalize", action="store_true", help="(LEGACY) disabled")
-    parser.add_argument("--apply-edits", default=None, help="(LEGACY) disabled")
-    parser.add_argument("--normalize-slim", action="store_true", help="(LEGACY) disabled")
-    parser.add_argument("--apply-instructions", default=None, help="(LEGACY) disabled")
+ 
 
     args = parser.parse_args()
 
@@ -1212,23 +228,47 @@ def main():
     else:
         extract_dir = decomposer.extract(output_dir=args.extract_dir)
 
-    analysis_path = None
-    if args.write_analysis and not (args.phase2_arch_extract or args.phase2_build_bundle):
-        analysis_path = decomposer.save_analysis()
-
     # -------------------------------
     # PHASE 2: BUILD SLIM BUNDLE
     # -------------------------------
+    
     if args.phase2_build_bundle:
-        bundle = build_phase2_slim_bundle(extract_dir, args.phase2_discipline)
+        # Load available roles from architect registry if provided
+        available_roles = None
+        if args.phase2_arch_extract:
+            arch_path = Path(args.phase2_arch_extract)
+            available_roles = load_available_roles_from_registry(arch_path)
+            if available_roles:
+                print(f"Available roles from architect template: {available_roles}")
+            else:
+                print("WARNING: Could not load architect registry, using all standard roles")
+        
+        bundle = build_phase2_slim_bundle(
+            extract_dir, 
+            args.phase2_discipline,
+            available_roles=available_roles
+        )
 
         out_path = extract_dir / "phase2_slim_bundle.json"
         out_path.write_text(json.dumps(bundle, indent=2), encoding="utf-8")
 
+        # Also write the prompts for convenience
+        prompts_dir = extract_dir / "phase2_prompts"
+        prompts_dir.mkdir(exist_ok=True)
+        (prompts_dir / "master_prompt.txt").write_text(PHASE2_MASTER_PROMPT.strip(), encoding="utf-8")
+        (prompts_dir / "run_instruction.txt").write_text(PHASE2_RUN_INSTRUCTION.strip(), encoding="utf-8")
+
         print(f"Phase 2 slim bundle written: {out_path}")
-        print("NEXT STEP:")
-        print("- Paste phase2_slim_bundle.json into LLM")
-        print("- Save output as phase2_classifications.json")
+        print(f"Phase 2 prompts written to: {prompts_dir}")
+        print("")
+        print("NEXT STEPS:")
+        print("1. Open your LLM (Claude/ChatGPT)")
+        print("2. Paste the content of: master_prompt.txt")
+        print("3. Paste the content of: phase2_slim_bundle.json") 
+        print("4. Paste the content of: run_instruction.txt")
+        print("5. Save LLM JSON output as: phase2_classifications.json")
+        print("6. Run Phase 2 apply:")
+        print(f'   python docx_decomposer.py {args.docx_path} --phase2-arch-extract <arch_folder> --phase2-classifications phase2_classifications.json')
         return
 
     # -------------------------------
@@ -1236,6 +276,7 @@ def main():
     # -------------------------------
     if args.phase2_arch_extract and args.phase2_classifications:
         from docx_patch import patch_docx  # your surgical ZIP patch writer
+        from arch_env_applier import apply_environment_to_target
 
         log: List[str] = []
 
@@ -1266,20 +307,70 @@ def main():
         if preflight.get("unmapped_roles"):
             print(f"WARNING: Unmapped roles: {preflight['unmapped_roles']}")
 
+        # ─────────────────────────────────────────────────────────────────
+        # NEW: Apply formatting environment BEFORE importing styles
+        # ─────────────────────────────────────────────────────────────────
+        arch_template_registry_path = arch_root / "arch_template_registry.json"
+        if arch_template_registry_path.exists():
+            env_registry = json.loads(arch_template_registry_path.read_text(encoding="utf-8"))
+            apply_environment_to_target(
+                target_extract_dir=extract_dir,
+                registry=env_registry,
+                log=log
+            )
+            print(f"Applied environment from: {arch_template_registry_path}")
+        else:
+            log.append("WARNING: No arch_template_registry.json found; skipping environment application")
+            print(f"WARNING: arch_template_registry.json not found at {arch_template_registry_path}")
+
+
+
+
+
         # Import only styles actually used by this doc's classifications
         used_roles = {
-            item.get("csi_role")
-            for item in classifications.get("classifications", [])
-            if isinstance(item, dict) and isinstance(item.get("csi_role"), str)
+        item.get("csi_role")
+        for item in classifications.get("classifications", [])
+        if isinstance(item, dict) and isinstance(item.get("csi_role"), str)
         }
         needed_style_ids = sorted({arch_registry[r] for r in used_roles if r in arch_registry})
+
+        # ─────────────────────────────────────────────────────────────────
+        # NEW: Import numbering definitions BEFORE importing styles
+        # ─────────────────────────────────────────────────────────────────
+        style_numid_remap = {}
+        if HAS_NUMBERING_IMPORTER and arch_template_registry_path.exists():
+            try:
+                log.append("")
+                log.append("=" * 60)
+                log.append("IMPORTING NUMBERING DEFINITIONS")
+                log.append("=" * 60)
+                
+                style_numid_remap = import_numbering(
+                    arch_extract_dir=arch_root,
+                    target_extract_dir=extract_dir,
+                    arch_template_registry=env_registry,
+                    style_ids_to_import=needed_style_ids,
+                    log=log
+                )
+            except Exception as e:
+                log.append(f"WARNING: Numbering import failed: {e}")
+
+        log.append("")
+        log.append("=" * 60)
+        log.append("IMPORTING STYLE DEFINITIONS")
+        log.append("=" * 60)
 
         import_arch_styles_into_target(
             target_extract_dir=extract_dir,
             arch_extract_dir=arch_root,
             needed_style_ids=needed_style_ids,
-            log=log
+            log=log,
+            style_numid_remap=style_numid_remap
         )
+
+
+
         if not needed_style_ids:
             log.append("No architect styles needed for this doc (no mapped roles used).")
 
@@ -1296,15 +387,6 @@ def main():
         # Your existing stability checks (headers/footers + sectPr + document.xml.rels)
         verify_stability(extract_dir, snap)
 
-        # Optional: your separate invariants module (if you created it)
-        # (This is the "no run-level <w:rPr> edits" guard, etc.)
-        try:
-            from phase2_invariants import verify_phase2_invariants
-            new_doc_xml_bytes = (extract_dir / "word" / "document.xml").read_bytes()
-            verify_phase2_invariants(src_docx=input_docx_path, new_document_xml=new_doc_xml_bytes)
-        except ModuleNotFoundError:
-            pass
-
         # ALWAYS write final formatted docx by patching only edited parts
         output_docx_path = Path(args.output_docx) if args.output_docx else (
             input_docx_path.with_name(input_docx_path.stem + "_PHASE2_FORMATTED.docx")
@@ -1315,11 +397,53 @@ def main():
             "word/styles.xml":   (extract_dir / "word" / "styles.xml").read_bytes(),
         }
 
+        # Add environment parts if they were modified
+        theme_path = extract_dir / "word" / "theme" / "theme1.xml"
+        if theme_path.exists():
+            replacements["word/theme/theme1.xml"] = theme_path.read_bytes()
+        
+        settings_path = extract_dir / "word" / "settings.xml"
+        if settings_path.exists():
+            replacements["word/settings.xml"] = settings_path.read_bytes()
+        
+        font_table_path = extract_dir / "word" / "fontTable.xml"
+        if font_table_path.exists():
+            replacements["word/fontTable.xml"] = font_table_path.read_bytes()
+
+        # numbering may have been updated with imported definitions
+        numbering_path = extract_dir / "word" / "numbering.xml"
+        if numbering_path.exists():
+            replacements["word/numbering.xml"] = numbering_path.read_bytes()
+        
+        # Content types may have been updated for new theme
+        content_types_path = extract_dir / "[Content_Types].xml"
+        if content_types_path.exists():
+            replacements["[Content_Types].xml"] = content_types_path.read_bytes()
+        
+        # Rels may have been updated for new theme relationship
+        rels_path = extract_dir / "word" / "_rels" / "document.xml.rels"
+        if rels_path.exists():
+            replacements["word/_rels/document.xml.rels"] = rels_path.read_bytes()
+
+
         patch_docx(
             src_docx=input_docx_path,
             out_docx=output_docx_path,
             replacements=replacements,
         )
+
+        # Optional: additional invariants (sectPr, no run-level edits, headers/footers unchanged).
+        # This requires the final output docx to validate header/footer byte stability.
+        try:
+            from phase2_invariants import verify_phase2_invariants
+            new_doc_xml_bytes = (extract_dir / "word" / "document.xml").read_bytes()
+            verify_phase2_invariants(
+                src_docx=input_docx_path,
+                new_document_xml=new_doc_xml_bytes,
+                new_docx=output_docx_path,
+            )
+        except ModuleNotFoundError:
+            pass
 
         issues_path = extract_dir / "phase2_issues.log"
         issues_path.write_text("\n".join(log) + "\n", encoding="utf-8")
@@ -1350,9 +474,6 @@ def main():
         print(f"Analysis report: {analysis_path}")
 
 
-
-
-
 def sha256_bytes(b: bytes) -> str:
     return hashlib.sha256(b).hexdigest()
 
@@ -1364,7 +485,6 @@ class StabilitySnapshot:
     header_footer_hashes: Dict[str, str]
     sectpr_hash: str
     doc_rels_hash: str
-
 
 def snapshot_headers_footers(extract_dir: Path) -> Dict[str, str]:
     wf = extract_dir / "word"
@@ -1393,50 +513,6 @@ def snapshot_stability(extract_dir: Path) -> StabilitySnapshot:
         doc_rels_hash=snapshot_doc_rels_hash(extract_dir),
     )
 
-
-ALLOWED_EDIT_PATHS = {
-    "word/document.xml",
-    "word/styles.xml",
-    "word/numbering.xml",
-    # NOTE: headers/footers are intentionally NOT allowed to be edited by LLM.
-}
-
-def apply_llm_edits(extract_dir: Path, edits_json: dict, diff_dir: Path) -> None:
-    diff_dir.mkdir(parents=True, exist_ok=True)
-
-    edits = edits_json.get("edits", [])
-    if not isinstance(edits, list) or not edits:
-        raise ValueError("No edits found in LLM response JSON.")
-
-    for edit in edits:
-        rel_path = edit["path"].replace("\\", "/")
-        if rel_path not in ALLOWED_EDIT_PATHS:
-            raise ValueError(f"Edit path not allowed: {rel_path}")
-
-        target = extract_dir / rel_path
-        if not target.exists():
-            raise FileNotFoundError(f"Target file not found in package: {rel_path}")
-
-        before = target.read_text(encoding="utf-8")
-        after = edit["content"]
-
-        sha_before = edit.get("sha256_before")
-        if sha_before and sha256_text(before) != sha_before:
-            raise ValueError(f"sha256_before mismatch for {rel_path}")
-
-        # Write replacement exactly as provided
-        target.write_text(after, encoding="utf-8")
-
-        # Emit diff
-        diff = difflib.unified_diff(
-            before.splitlines(keepends=True),
-            after.splitlines(keepends=True),
-            fromfile=f"a/{rel_path}",
-            tofile=f"b/{rel_path}",
-        )
-        diff_path = diff_dir / (rel_path.replace("/", "__") + ".diff")
-        diff_path.write_text("".join(diff), encoding="utf-8")
-
 def verify_stability(extract_dir: Path, snap: StabilitySnapshot) -> None:
     current_hf = snapshot_headers_footers(extract_dir)
     if current_hf != snap.header_footer_hashes:
@@ -1456,8 +532,6 @@ def verify_stability(extract_dir: Path, snap: StabilitySnapshot) -> None:
     current_rels = snapshot_doc_rels_hash(extract_dir)
     if current_rels != snap.doc_rels_hash:
         raise ValueError("document.xml.rels stability check FAILED (can break header/footer).")
-
-
 
 def _extract_style_block(styles_xml_text: str, style_id: str) -> Optional[str]:
     m = re.search(
@@ -1529,7 +603,6 @@ def ensure_explicit_numpr_from_current_style(p_xml: str, styles_xml_text: str) -
     # Create pPr if missing
     return re.sub(r'(<w:p\b[^>]*>)', rf"\1<w:pPr>{numpr}</w:pPr>", p_xml, count=1)
 
-
 def _strip_pstyle_and_numpr(ppr_inner: str) -> str:
     if not ppr_inner:
         return ""
@@ -1558,19 +631,59 @@ def _docdefaults_ppr_inner(styles_xml_text: str) -> str:
     return _strip_pstyle_and_numpr(m.group(1).strip()) if m else ""
 
 def _effective_rpr_inner_in_arch(arch_styles_xml_text: str, style_id: str) -> str:
-    seen = set()
-    cur = style_id
-    hops = 0
-    while cur and cur not in seen and hops < 50:
-        seen.add(cur); hops += 1
-        blk = _extract_style_block(arch_styles_xml_text, cur)
-        if not blk:
-            break
-        inner = _extract_tag_inner(blk, "w:rPr")
-        if inner and inner.strip():
-            return inner.strip()
-        cur = _extract_basedOn(blk)
-    return _docdefaults_rpr_inner(arch_styles_xml_text)
+    """
+    Return a *minimal* effective rPr inner XML for the FORCE typography set only.
+
+    We resolve each child tag independently through the basedOn chain, then fall back
+    to docDefaults. This avoids the bug where a derived style contains <w:rPr> but
+    doesn't specify (for example) <w:rFonts>, causing inherited font settings to be missed.
+    """
+    force_tags = ("rFonts", "sz", "szCs", "lang")
+
+    def _extract_child_node(inner_xml: str, tag: str) -> Optional[str]:
+        if not inner_xml:
+            return None
+        # Self-closing: <w:tag .../>
+        m = re.search(rf"(<w:{re.escape(tag)}\b[^>]*/>)", inner_xml)
+        if m:
+            return m.group(1)
+        # Paired: <w:tag ...>...</w:tag>
+        m = re.search(
+            rf"(<w:{re.escape(tag)}\b[^>]*>[\s\S]*?</w:{re.escape(tag)}>)",
+            inner_xml,
+            flags=re.S
+        )
+        if m:
+            return m.group(1)
+        return None
+
+    def _resolve(tag: str) -> Optional[str]:
+        seen = set()
+        cur = style_id
+        hops = 0
+        while cur and cur not in seen and hops < 50:
+            seen.add(cur)
+            hops += 1
+            blk = _extract_style_block(arch_styles_xml_text, cur)
+            if not blk:
+                break
+            rpr_inner = _extract_tag_inner(blk, "w:rPr") or ""
+            node = _extract_child_node(rpr_inner, tag)
+            if node:
+                return node
+            cur = _extract_basedOn(blk)
+
+        # fall back to docDefaults
+        docdef_inner = _docdefaults_rpr_inner(arch_styles_xml_text)
+        return _extract_child_node(docdef_inner, tag)
+
+    nodes: List[str] = []
+    for t in force_tags:
+        node = _resolve(t)
+        if node:
+            nodes.append(node)
+
+    return "".join(nodes)
 
 def _effective_ppr_inner_in_arch(arch_styles_xml_text: str, style_id: str) -> str:
     seen = set()
@@ -1588,18 +701,91 @@ def _effective_ppr_inner_in_arch(arch_styles_xml_text: str, style_id: str) -> st
         cur = _extract_basedOn(blk)
     return _docdefaults_ppr_inner(arch_styles_xml_text)
 
-def materialize_arch_style_block(style_block: str, style_id: str, arch_styles_xml_text: str) -> str:
-    # Inject rPr only if missing entirely
-    if "<w:rPr" not in style_block:
-        eff = _effective_rpr_inner_in_arch(arch_styles_xml_text, style_id)
-        if eff.strip():
-            style_block = style_block.replace(
-                "</w:style>",
-                f"\n  <w:rPr>{eff}</w:rPr>\n</w:style>"
-            )
+def _rpr_contains_tag(rpr_inner: str, tag: str) -> bool:
+    return re.search(rf"<w:{re.escape(tag)}\b", rpr_inner) is not None
 
-    # Inject pPr only if missing entirely
-    if "<w:pPr" not in style_block:
+def _extract_rpr_inner(style_block: str) -> Optional[str]:
+    return _extract_tag_inner(style_block, "w:rPr")
+
+def _inject_missing_rpr_children(style_block: str, missing_children_xml: str) -> str:
+    """Insert missing rPr children (already as raw XML) just before </w:rPr>."""
+    if not missing_children_xml.strip():
+        return style_block
+    if "</w:rPr>" not in style_block:
+        return style_block
+    # Replace only the first closing tag (avoid accidental insertion into nested rPr blocks)
+    return style_block.replace("</w:rPr>", f"{missing_children_xml}</w:rPr>", 1)
+
+def _materialize_minimal_typography(style_block: str, style_id: str, arch_styles_xml_text: str) -> str:
+    """
+    Make imported styles resilient across documents by ensuring a minimal set of
+    typography-related rPr children exist (fonts, sizes, language).
+
+    IMPORTANT:
+    - Does NOT invent values.
+    - Only copies missing nodes from the *effective* arch style chain + docDefaults.
+    - Avoids rewriting the whole block.
+    """
+    eff_rpr = _effective_rpr_inner_in_arch(arch_styles_xml_text, style_id).strip()
+    if not eff_rpr:
+        return style_block
+
+    # If the style has no rPr at all, inject the minimal effective rPr.
+    if "<w:rPr" not in style_block:
+        return style_block.replace(
+            "</w:style>",
+            f"\n  <w:rPr>{eff_rpr}</w:rPr>\n</w:style>"
+        )
+
+    # Expand self-closing rPr to open/close so we can inject children.
+    if re.search(r"<w:rPr\b[^>]*/>", style_block):
+        style_block = re.sub(r"<w:rPr\b[^>]*/>", "<w:rPr></w:rPr>", style_block, count=1)
+
+    cur_rpr = _extract_rpr_inner(style_block) or ""
+
+    missing_nodes: List[str] = []
+
+    def _get_child_node(tag: str) -> Optional[str]:
+        # self-closing or paired tags, searched within eff_rpr
+        m = re.search(rf"(<w:{tag}\b[^>]*/>)", eff_rpr)
+        if m:
+            return m.group(1)
+        m = re.search(rf"(<w:{tag}\b[^>]*>[\s\S]*?</w:{tag}>)", eff_rpr, flags=re.S)
+        if m:
+            return m.group(1)
+        return None
+
+    for tag in ["rFonts", "sz", "szCs", "lang"]:
+        if _rpr_contains_tag(cur_rpr, tag):
+            continue
+        node = _get_child_node(tag)
+        if node:
+            missing_nodes.append(node)
+
+    if not missing_nodes:
+        return style_block
+
+    insertion = "".join(missing_nodes)
+    return _inject_missing_rpr_children(style_block, insertion)
+
+def materialize_arch_style_block(style_block: str, style_id: str, arch_styles_xml_text: str) -> str:
+    """
+    Phase 2: import-time style hardening.
+
+    Goal: ensure styles imported from the architect template remain visually stable
+    when applied in a different document, without touching runs or numbering.xml.
+
+    Strategy:
+    - Inject pPr only for paragraph styles, and only if missing entirely.
+    - Materialize a minimal typography FORCE set into rPr:
+        w:rFonts, w:sz, w:szCs, w:lang
+      Values are copied from the *effective* architect chain + docDefaults.
+    """
+    m = re.search(r'<w:style\b[^>]*w:type="([^"]+)"', style_block)
+    stype = m.group(1) if m else None
+
+    # Inject pPr only if missing entirely (paragraph styles only)
+    if stype == "paragraph" and "<w:pPr" not in style_block:
         effp = _effective_ppr_inner_in_arch(arch_styles_xml_text, style_id)
         if effp.strip():
             style_block = style_block.replace(
@@ -1607,65 +793,12 @@ def materialize_arch_style_block(style_block: str, style_id: str, arch_styles_xm
                 f"\n  <w:pPr>{effp}</w:pPr>\n</w:style>"
             )
 
+    # Typography materialization
+    style_block = _materialize_minimal_typography(style_block, style_id, arch_styles_xml_text)
+
     return style_block
 
-
-
-
-def build_llm_bundle(extract_dir: Path) -> dict:
-    paths = [
-        "word/document.xml",
-        "word/styles.xml",
-        "word/numbering.xml",
-    ]
-
-    # Include headers/footers for analysis ONLY (not editable)
-    hf_paths = []
-    wf = extract_dir / "word"
-    for p in sorted(wf.glob("header*.xml")) + sorted(wf.glob("footer*.xml")):
-        hf_paths.append(str(p.relative_to(extract_dir)).replace("\\", "/"))
-
-    payload = {"editable": {}, "read_only": {}}
-
-    for rel in paths:
-        p = extract_dir / rel
-        if p.exists():
-            txt = p.read_text(encoding="utf-8")
-            payload["editable"][rel] = {
-                "sha256": sha256_text(txt),
-                "content": txt
-            }
-
-    for rel in hf_paths:
-        p = extract_dir / rel
-        txt = p.read_text(encoding="utf-8")
-        payload["read_only"][rel] = {
-            "sha256": sha256_text(txt),
-            "content": txt
-        }
-
-    # settings.xml is optional; include read-only unless you are debugging layout
-    settings_rel = "word/settings.xml"
-    sp = extract_dir / settings_rel
-    if sp.exists():
-        txt = sp.read_text(encoding="utf-8")
-        payload["read_only"][settings_rel] = {
-            "sha256": sha256_text(txt),
-            "content": txt
-        }
-
-    return payload
-
-
-
 W_NS = "http://schemas.openxmlformats.org/wordprocessingml/2006/main"
-
-def _get_attr(elem, local_name: str) -> Optional[str]:
-    # WordprocessingML attributes use w:val etc (namespaced). ET shows {ns}val.
-    return elem.get(f"{{{W_NS}}}{local_name}")
-
-def _q(tag: str) -> str:
-    return f"{{{W_NS}}}{tag}"
 
 def iter_paragraph_xml_blocks(document_xml_text: str):
     # Non-greedy paragraph blocks. Works well for DOCX document.xml.
@@ -1673,16 +806,12 @@ def iter_paragraph_xml_blocks(document_xml_text: str):
     for m in re.finditer(r"(<w:p\b[\s\S]*?</w:p>)", document_xml_text):
         yield m.start(), m.end(), m.group(1)
 
+
 def paragraph_text_from_block(p_xml: str) -> str:
-    # Extract visible text quickly (good enough for classification)
     texts = re.findall(r"<w:t\b[^>]*>([\s\S]*?)</w:t>", p_xml)
     if not texts:
         return ""
-    # Unescape minimal XML entities
-    joined = "".join(texts)
-    joined = joined.replace("&lt;", "<").replace("&gt;", ">").replace("&amp;", "&")
-    joined = joined.replace("&quot;", "\"").replace("&apos;", "'")
-    # collapse whitespace
+    joined = html.unescape("".join(texts))
     joined = re.sub(r"\s+", " ", joined).strip()
     return joined
 
@@ -1724,194 +853,69 @@ def paragraph_ppr_hints_from_block(p_xml: str) -> Dict[str, Any]:
         hints["spacing"] = spacing
     return hints
 
-def build_style_catalog(styles_xml_path: Path, used_style_ids: Set[str]) -> Dict[str, Any]:
-    # Parse styles.xml and extract compact info only for used styles + inheritance chain
-    tree = ET.parse(styles_xml_path)
-    root = tree.getroot()
 
-    # index by styleId
-    styles_by_id: Dict[str, ET.Element] = {}
-    for st in root.findall(f".//{_q('style')}"):
-        sid = _get_attr(st, "styleId")
-        if sid:
-            styles_by_id[sid] = st
-
-    # expand basedOn chain
-    to_include = set(used_style_ids)
-    changed = True
-    while changed:
-        changed = False
-        for sid in list(to_include):
-            st = styles_by_id.get(sid)
-            if st is None:
-                continue
-            based = st.find(_q("basedOn"))
-            if based is not None:
-                base_id = _get_attr(based, "val")
-                if base_id and base_id not in to_include:
-                    to_include.add(base_id)
-                    changed = True
-
-    def extract_pr(st: ET.Element) -> Dict[str, Any]:
-        out: Dict[str, Any] = {"pPr": {}, "rPr": {}}
-        pPr = st.find(_q("pPr"))
-        rPr = st.find(_q("rPr"))
-
-        if pPr is not None:
-            jc = pPr.find(_q("jc"))
-            if jc is not None:
-                out["pPr"]["jc"] = _get_attr(jc, "val")
-            spacing = pPr.find(_q("spacing"))
-            if spacing is not None:
-                out["pPr"]["spacing"] = {k: spacing.get(f"{{{W_NS}}}{k}") for k in ["before","after","line"] if spacing.get(f"{{{W_NS}}}{k}") is not None}
-            ind = pPr.find(_q("ind"))
-            if ind is not None:
-                out["pPr"]["ind"] = {k: ind.get(f"{{{W_NS}}}{k}") for k in ["left","right","firstLine","hanging"] if ind.get(f"{{{W_NS}}}{k}") is not None}
-
-        if rPr is not None:
-            rFonts = rPr.find(_q("rFonts"))
-            if rFonts is not None:
-                out["rPr"]["rFonts"] = {k: rFonts.get(f"{{{W_NS}}}{k}") for k in ["ascii","hAnsi","cs"] if rFonts.get(f"{{{W_NS}}}{k}") is not None}
-            sz = rPr.find(_q("sz"))
-            if sz is not None:
-                out["rPr"]["sz"] = _get_attr(sz, "val")
-            b = rPr.find(_q("b"))
-            if b is not None:
-                out["rPr"]["b"] = True
-            i = rPr.find(_q("i"))
-            if i is not None:
-                out["rPr"]["i"] = True
-            u = rPr.find(_q("u"))
-            if u is not None:
-                out["rPr"]["u"] = _get_attr(u, "val") or True
-            color = rPr.find(_q("color"))
-            if color is not None:
-                out["rPr"]["color"] = _get_attr(color, "val")
-
-        return out
-
-    catalog: Dict[str, Any] = {}
-    for sid in sorted(to_include):
-        st = styles_by_id.get(sid)
-        if st is None:
-            continue
-        name_el = st.find(_q("name"))
-        based_el = st.find(_q("basedOn"))
-        st_type = _get_attr(st, "type")
-        catalog[sid] = {
-            "styleId": sid,
-            "type": st_type,
-            "name": _get_attr(name_el, "val") if name_el is not None else None,
-            "basedOn": _get_attr(based_el, "val") if based_el is not None else None,
-            **extract_pr(st),
-        }
-    return catalog
-
-def build_numbering_catalog(numbering_xml_path: Path, used_num_ids: Set[str]) -> Dict[str, Any]:
-    if not numbering_xml_path.exists():
-        return {}
-
-    tree = ET.parse(numbering_xml_path)
-    root = tree.getroot()
-
-    # map numId -> abstractNumId
-    num_map: Dict[str, str] = {}
-    for num in root.findall(f".//{_q('num')}"):
-        numId = _get_attr(num, "numId")
-        abs_el = num.find(_q("abstractNumId"))
-        if numId and abs_el is not None:
-            absId = _get_attr(abs_el, "val")
-            if absId:
-                num_map[numId] = absId
-
-    abs_needed = {num_map[n] for n in used_num_ids if n in num_map}
-
-    # extract abstractNum level patterns
-    abstracts: Dict[str, Any] = {}
-    for absn in root.findall(f".//{_q('abstractNum')}"):
-        absId = _get_attr(absn, "abstractNumId")
-        if not absId or absId not in abs_needed:
-            continue
-        lvls = []
-        for lvl in absn.findall(_q("lvl")):
-            ilvl = _get_attr(lvl, "ilvl")
-            numFmt = lvl.find(_q("numFmt"))
-            lvlText = lvl.find(_q("lvlText"))
-            pPr = lvl.find(_q("pPr"))
-            lvl_entry = {
-                "ilvl": ilvl,
-                "numFmt": _get_attr(numFmt, "val") if numFmt is not None else None,
-                "lvlText": _get_attr(lvlText, "val") if lvlText is not None else None,
-                "pPr": {}
-            }
-            if pPr is not None:
-                ind = pPr.find(_q("ind"))
-                if ind is not None:
-                    lvl_entry["pPr"]["ind"] = {k: ind.get(f"{{{W_NS}}}{k}") for k in ["left","hanging","firstLine"] if ind.get(f"{{{W_NS}}}{k}") is not None}
-                jc = pPr.find(_q("jc"))
-                if jc is not None:
-                    lvl_entry["pPr"]["jc"] = _get_attr(jc, "val")
-            lvls.append(lvl_entry)
-        abstracts[absId] = {"abstractNumId": absId, "levels": lvls}
-
-    nums: Dict[str, Any] = {}
-    for numId in sorted(used_num_ids):
-        absId = num_map.get(numId)
-        nums[numId] = {"numId": numId, "abstractNumId": absId}
-
-    return {"nums": nums, "abstracts": abstracts}
-
-def build_slim_bundle(extract_dir: Path) -> Dict[str, Any]:
-    # Stability hashes
-    snap = snapshot_stability(extract_dir)
-
-    doc_path = extract_dir / "word" / "document.xml"
-    doc_text = doc_path.read_text(encoding="utf-8")
-
-    paragraphs = []
-    used_style_ids: Set[str] = set()
-    used_num_ids: Set[str] = set()
-
-    for idx, (_s, _e, p_xml) in enumerate(iter_paragraph_xml_blocks(doc_text)):
-        txt = paragraph_text_from_block(p_xml)
-        pStyle = paragraph_pstyle_from_block(p_xml)
-        numpr = paragraph_numpr_from_block(p_xml)
-        hints = paragraph_ppr_hints_from_block(p_xml)
-        contains_sect = paragraph_contains_sectpr(p_xml)
-
-        if pStyle:
-            used_style_ids.add(pStyle)
-        if numpr.get("numId"):
-            used_num_ids.add(numpr["numId"])
-
-        # Keep summary compact: cap text length
-        if len(txt) > 200:
-            txt = txt[:200] + "…"
-
-        paragraphs.append({
-            "paragraph_index": idx,
-            "text": txt,
-            "pStyle": pStyle,
-            "numPr": numpr if (numpr.get("numId") or numpr.get("ilvl")) else None,
-            "pPr_hints": hints if hints else None,
-            "contains_sectPr": contains_sect
-        })
-
-    styles_path = extract_dir / "word" / "styles.xml"
-    style_catalog = build_style_catalog(styles_path, used_style_ids) if styles_path.exists() else {}
-
-    numbering_path = extract_dir / "word" / "numbering.xml"
-    numbering_catalog = build_numbering_catalog(numbering_path, used_num_ids)
-
-    return {
-        "stability": {
-            "header_footer_hashes": snap.header_footer_hashes,
-            "sectPr_hash": snap.sectpr_hash
-        },
-        "paragraphs": paragraphs,
-        "style_catalog": style_catalog,
-        "numbering_catalog": numbering_catalog
-    }
+def strip_run_font_formatting(p_xml: str) -> str:
+    """
+    Strip font-related formatting from all runs in a paragraph.
+    
+    This allows the paragraph style's font definitions to take effect,
+    overriding hardcoded run-level fonts (common in MasterSpec/ARCOM docs).
+    
+    Strips from <w:rPr> inside <w:r>:
+    - <w:rFonts .../> (font family)
+    - <w:sz .../> (font size)
+    - <w:szCs .../> (complex script font size)
+    
+    Preserves:
+    - Bold, italic, underline, strikethrough
+    - Colors, highlighting
+    - Character styles (<w:rStyle>)
+    - Everything else
+    """
+    # Don't touch sectPr paragraphs
+    if "<w:sectPr" in p_xml:
+        return p_xml
+    
+    def strip_font_from_rpr_text(rpr_text: str) -> str:
+        """Process a raw rPr string."""
+        result = rpr_text
+        # Strip rFonts (self-closing or with content)
+        result = re.sub(r'<w:rFonts\b[^>]*/>', '', result)
+        result = re.sub(r'<w:rFonts\b[^>]*>[\s\S]*?</w:rFonts>', '', result, flags=re.S)
+        # Strip sz (font size)
+        result = re.sub(r'<w:sz\b[^>]*/>', '', result)
+        # Strip szCs (complex script font size)
+        result = re.sub(r'<w:szCs\b[^>]*/>', '', result)
+        
+        # Check if empty - remove entirely if so
+        inner = re.sub(r'<w:rPr\b[^>]*>([\s\S]*)</w:rPr>', r'\1', result, flags=re.S)
+        if not inner.strip():
+            return ''
+        return result
+    
+    def process_run(run_match):
+        """Process a single <w:r>...</w:r> block."""
+        run_block = run_match.group(0)
+        
+        # Find and replace rPr inside this run
+        run_block = re.sub(
+            r'<w:rPr\b[^>]*>[\s\S]*?</w:rPr>',
+            lambda m: strip_font_from_rpr_text(m.group(0)),
+            run_block,
+            count=1,
+            flags=re.S
+        )
+        return run_block
+    
+    # Process each run in the paragraph
+    result = re.sub(
+        r'<w:r\b[^>]*>[\s\S]*?</w:r>',
+        process_run,
+        p_xml,
+        flags=re.S
+    )
+    
+    return result
 
 
 def apply_phase2_classifications(
@@ -1920,15 +924,48 @@ def apply_phase2_classifications(
     arch_style_registry: Dict[str, str],
     log: List[str]
 ) -> None:
+    """
+    Apply CSI role classifications to paragraphs by setting pStyle.
+    
+    Also strips run-level font formatting so the style's fonts take effect.
+    This handles MasterSpec/ARCOM documents that have hardcoded fonts in every run.
+    """
     doc_path = extract_dir / "word" / "document.xml"
-    styles_xml_text = (extract_dir / "word" / "styles.xml").read_text(encoding="utf-8")
     doc_text = doc_path.read_text(encoding="utf-8")
 
     # Load styles once so we can preserve style-linked numbering before swapping styles
     styles_xml_text = (extract_dir / "word" / "styles.xml").read_text(encoding="utf-8")
+    style_ids_in_styles = set(re.findall(r'w:styleId="([^"]+)"', styles_xml_text))
 
     blocks = list(iter_paragraph_xml_blocks(doc_text))
     para_blocks = [b[2] for b in blocks]
+
+    # Track which paragraphs we modify (for logging)
+    modified_indices = set()
+
+    # Contract check: normalize paragraphs for comparison
+    # We now ALLOW changes to: pStyle, numPr, and run-level font formatting (rFonts, sz, szCs)
+    def _normalize_paragraph_for_contract(p_xml: str) -> str:
+        """
+        Normalize paragraph for contract comparison.
+        Strips elements we're allowed to change.
+        """
+        out = p_xml
+        # Strip pStyle (we change this)
+        out = re.sub(r"<w:pStyle\b[^>]*/>", "", out)
+        # Strip numPr (we may materialize this)
+        out = re.sub(r"<w:numPr\b[^>]*>[\s\S]*?</w:numPr>", "", out, flags=re.S)
+        # Strip run-level font formatting (we now strip this too)
+        out = re.sub(r"<w:rFonts\b[^>]*/>", "", out)
+        out = re.sub(r"<w:rFonts\b[^>]*>[\s\S]*?</w:rFonts>", "", out, flags=re.S)
+        out = re.sub(r"<w:sz\b[^>]*/>", "", out)
+        out = re.sub(r"<w:szCs\b[^>]*/>", "", out)
+        # Clean up empty rPr blocks that might result
+        out = re.sub(r"<w:rPr>\s*</w:rPr>", "", out)
+        out = re.sub(r"<w:rPr\s*/>", "", out)
+        return out
+
+    contract_before = [_normalize_paragraph_for_contract(p) for p in para_blocks]
 
     items = classifications.get("classifications", [])
     if not isinstance(items, list):
@@ -1952,20 +989,53 @@ def apply_phase2_classifications(
 
         style_id = arch_style_registry.get(role)
         if not style_id:
-            # Your preflight already expects SKIP / END_OF_SECTION to be unmapped :contentReference[oaicite:0]{index=0}
-            log.append(f"Missing architect style for role: {role} (paragraph {idx})")
+            log.append(f"Unmapped CSI role '{role}' at paragraph {idx} (skipped)")
             continue
+
+        if style_id not in style_ids_in_styles:
+            raise ValueError(
+                f"Phase 2 needs styleId '{style_id}' for role '{role}' at paragraph {idx}, "
+                "but that styleId is not present in target word/styles.xml. "
+                "Import failed or registry mismatch."
+            )
 
         if paragraph_contains_sectpr(para_blocks[idx]):
             log.append(f"Skipped sectPr paragraph at index {idx}")
             continue
 
-        # KEY FIX: preserve "dynamic numbering" by materializing style-linked numPr
+        # Preserve list continuation by materializing style-linked numPr *before* swapping styles.
         pb = para_blocks[idx]
         pb = ensure_explicit_numpr_from_current_style(pb, styles_xml_text)
 
+        # NEW: Strip run-level font formatting so style fonts take effect
+        pb = strip_run_font_formatting(pb)
+
         # Now safely swap pStyle
         para_blocks[idx] = apply_pstyle_to_paragraph_block(pb, style_id)
+        modified_indices.add(idx)
+
+    # Log summary
+    log.append(f"Applied styles to {len(modified_indices)} paragraphs")
+    log.append(f"Stripped run-level font formatting from modified paragraphs")
+
+    # Enforce the diff contract.
+    contract_after = [_normalize_paragraph_for_contract(p) for p in para_blocks]
+    if len(contract_before) != len(contract_after):
+        raise RuntimeError("Internal error: paragraph count changed during Phase 2 application")
+
+    for i, (b, a) in enumerate(zip(contract_before, contract_after)):
+        if b != a:
+            diff = "\n".join(difflib.unified_diff(
+                b.splitlines(),
+                a.splitlines(),
+                fromfile=f"before:p[{i}]",
+                tofile=f"after:p[{i}]",
+                lineterm=""
+            ))
+            raise ValueError(
+                "Phase 2 invariant violation: paragraph content changed outside allowed edits "
+                f"(pStyle/numPr/run fonts) at paragraph index {i}.\n" + diff[:4000]
+            )
 
     # Rebuild document.xml
     out = []
@@ -1976,8 +1046,6 @@ def apply_phase2_classifications(
         last = e
     out.append(doc_text[last:])
     doc_path.write_text("".join(out), encoding="utf-8")
-
-
 
 
 def resolve_arch_extract_root(p: Path) -> Path:
@@ -1998,6 +1066,33 @@ def resolve_arch_extract_root(p: Path) -> Path:
         raise FileNotFoundError(f"Architect styles.xml not found at: {styles_path}")
 
     return p
+
+
+
+def load_available_roles_from_registry(registry_path: Path) -> Optional[List[str]]:
+    """
+    Load the list of available role names from arch_style_registry.json.
+    
+    Args:
+        registry_path: Path to arch_style_registry.json or the extracted folder containing it
+    
+    Returns:
+        List of role names (e.g., ["SectionTitle", "PART", "ARTICLE", ...])
+        Returns None if registry not found.
+    """
+    registry_path = Path(registry_path)
+    
+    # Handle both direct JSON path and folder path
+    if registry_path.is_dir():
+        registry_path = registry_path / "arch_style_registry.json"
+    
+    if not registry_path.exists():
+        return None
+    
+    registry = json.loads(registry_path.read_text(encoding="utf-8"))
+    roles = registry.get("roles", {})
+    
+    return sorted(roles.keys())
 
 
 def load_arch_style_registry(arch_extract_dir: Path) -> Dict[str, str]:
@@ -2045,8 +1140,6 @@ def load_arch_style_registry(arch_extract_dir: Path) -> Dict[str, str]:
         raise ValueError("arch_style_registry.json contained no usable role->style mappings")
 
     return out
-
-
 
 
 
@@ -2146,15 +1239,30 @@ def strip_boilerplate_with_report(content: str) -> tuple[str, list[str]]:
     return cleaned, hits
 
 
-
-def build_phase2_slim_bundle(extract_dir: Path, discipline: str) -> Dict[str, Any]:
+def build_phase2_slim_bundle(
+    extract_dir: Path,
+    discipline: str,
+    available_roles: Optional[List[str]] = None
+) -> Dict[str, Any]:
+    """
+    Build the slim bundle for Phase 2 LLM classification.
+    
+    Args:
+        extract_dir: Path to extracted DOCX folder
+        discipline: "mechanical" or "plumbing"
+        available_roles: List of role names available in the architect template.
+                        If None, all standard roles are allowed.
+    
+    Returns:
+        Dict containing document_meta, available_roles, filter_report, and paragraphs
+    """
     doc_path = extract_dir / "word" / "document.xml"
     doc_text = doc_path.read_text(encoding="utf-8")
 
     paragraphs = []
     filter_report = {
-        "paragraphs_removed_entirely": [],   # [{paragraph_index, tags, original_text_preview}]
-        "paragraphs_stripped": []            # [{paragraph_index, tags}]
+        "paragraphs_removed_entirely": [],
+        "paragraphs_stripped": []
     }
 
     for idx, (_s, _e, p_xml) in enumerate(iter_paragraph_xml_blocks(doc_text)):
@@ -2167,7 +1275,6 @@ def build_phase2_slim_bundle(extract_dir: Path, discipline: str) -> Dict[str, An
 
         cleaned_text, tags = strip_boilerplate_with_report(raw_text)
 
-        # If boilerplate stripping makes it empty, do not send to LLM
         if not cleaned_text:
             if tags:
                 filter_report["paragraphs_removed_entirely"].append({
@@ -2192,106 +1299,25 @@ def build_phase2_slim_bundle(extract_dir: Path, discipline: str) -> Dict[str, An
             "contains_sectPr": False
         })
 
+    # Default roles if none specified
+    if available_roles is None:
+        available_roles = [
+            "SectionID",
+            "SectionTitle", 
+            "PART",
+            "ARTICLE",
+            "PARAGRAPH",
+            "SUBPARAGRAPH",
+            "SUBSUBPARAGRAPH"
+        ]
+
     return {
         "document_meta": {
             "discipline": discipline
         },
+        "available_roles": available_roles,
         "filter_report": filter_report,
         "paragraphs": paragraphs
-    }
-
-
-
-def build_style_xml_block(style_def: Dict[str, Any]) -> str:
-    """Build a <w:style> block. Formatting is supplied ONLY by local derivation."""
-    sid = style_def.get("styleId")
-    name = style_def.get("name") or sid
-    based_on = style_def.get("basedOn")
-    stype = style_def.get("type") or "paragraph"
-    ppr_inner = style_def.get("pPr_inner") or ""
-    rpr_inner = style_def.get("rPr_inner") or ""
-
-    if not sid or not isinstance(sid, str):
-        raise ValueError("styleId is required")
-    if stype != "paragraph":
-        raise ValueError("Only paragraph styles are supported")
-
-    parts: List[str] = []
-    parts.append(f'<w:style w:type="{stype}" w:styleId="{sid}">')
-    parts.append(f'  <w:name w:val="{xml_escape(name)}"/>')
-    if based_on:
-        parts.append(f'  <w:basedOn w:val="{xml_escape(based_on)}"/>')
-    parts.append('  <w:qFormat/>')
-
-    # Paragraph properties (captured from exemplar)
-    if ppr_inner.strip():
-        parts.append('  <w:pPr>')
-        parts.append(ppr_inner.strip())
-        parts.append('  </w:pPr>')
-
-    # Run properties (captured from exemplar)
-    if rpr_inner.strip():
-        parts.append('  <w:rPr>')
-        parts.append(rpr_inner.strip())
-        parts.append('  </w:rPr>')
-
-    parts.append('</w:style>')
-    return "\n".join(parts) + "\n"
-
-
-def xml_escape(s: str) -> str:
-    return (s.replace("&", "&amp;")
-             .replace("<", "&lt;")
-             .replace(">", "&gt;")
-             .replace('"', "&quot;")
-             .replace("'", "&apos;"))
-
-
-def strip_pstyle_from_paragraph(p_xml: str) -> str:
-    # Remove any <w:pStyle .../> tags for drift comparison
-    return re.sub(r"<w:pStyle\b[^>]*/>", "", p_xml)
-
-
-def extract_paragraph_ppr_inner(p_xml: str) -> str:
-    """Return inner XML of <w:pPr>..</w:pPr> in a paragraph, or '' if none."""
-    # Self-closing
-    if re.search(r"<w:pPr\b[^>]*/>", p_xml):
-        return ""
-    m = re.search(r"<w:pPr\b[^>]*>(.*?)</w:pPr>", p_xml, flags=re.S)
-    if not m:
-        return ""
-    inner = m.group(1)
-    # Remove style assignment and numbering from captured style attributes
-    inner = re.sub(r"<w:pStyle\b[^>]*/>", "", inner)
-    inner = re.sub(r"<w:numPr\b[^>]*>.*?</w:numPr>", "", inner, flags=re.S)
-    return inner.strip()
-
-
-def extract_paragraph_rpr_inner(p_xml: str) -> str:
-    """Return inner XML of the first meaningful <w:rPr> inside a paragraph, or '' if none."""
-    # Find first run that contains a text node
-    for rm in re.finditer(r"<w:r\b[^>]*>(.*?)</w:r>", p_xml, flags=re.S):
-        run_inner = rm.group(1)
-        if "<w:t" not in run_inner:
-            continue
-        m = re.search(r"<w:rPr\b[^>]*>(.*?)</w:rPr>", run_inner, flags=re.S)
-        if m:
-            return m.group(1).strip()
-        # If the run has no rPr, keep searching
-    return ""
-
-
-def derive_style_def_from_paragraph(styleId: str, name: str, p_xml: str, based_on: Optional[str] = None) -> Dict[str, Any]:
-    """Derive a paragraph style definition from an exemplar paragraph block."""
-    ppr_inner = extract_paragraph_ppr_inner(p_xml)
-    rpr_inner = extract_paragraph_rpr_inner(p_xml)
-    return {
-        "styleId": styleId,
-        "name": name,
-        "type": "paragraph",
-        "basedOn": based_on,
-        "pPr_inner": ppr_inner,
-        "rPr_inner": rpr_inner,
     }
 
 
@@ -2329,7 +1355,8 @@ def import_arch_styles_into_target(
     target_extract_dir: Path,
     arch_extract_dir: Path,
     needed_style_ids: List[str],
-    log: List[str]
+    log: List[str], 
+    style_numid_remap: Optional[Dict[str, Dict[str, int]]] = None
 ) -> None:
     """
     Copy specific style blocks from architect styles.xml into target styles.xml (idempotent),
@@ -2351,14 +1378,38 @@ def import_arch_styles_into_target(
         _collect_style_deps_from_arch(arch_styles_text, sid, expanded)
 
     blocks: List[str] = []
+    missing: List[str] = []
     for sid in sorted(expanded):
         if sid in existing:
             continue
 
         blk = extract_style_block_raw(arch_styles_text, sid)
         if not blk:
-            log.append(f"Architect styles.xml missing styleId: {sid}")
+            missing.append(sid)
             continue
+
+
+
+
+        # handle numPr: remap if we have mapping, otherwise strip
+        if "<w:numPr" in blk:
+            if style_numid_remap and sid in style_numid_remap:
+                # remap numId to the imported numbering
+                remap = style_numid_remap[sid]
+                old_num_id = remap["old_numId"]
+                new_num_id = remap["new_numId"]
+                blk = re.sub(
+                    r'(<w:numId\s+w:val=")' + str(old_num_id) + r'"',
+                    rf'\g<1>{new_num_id}"',
+                    blk
+                )
+                log.append(f"Remapped numId {old_num_id} -> {new_num_id} in style: {sid}")
+            else:
+                # No remap available, strip numPr to avoid broken references
+                log.append(f"WARNING: Stripped <w:numPr> from imported style: {sid}")
+                blk = re.sub(r"<w:numPr\b[^>]*>[\s\S]*?</w:numPr>", "", blk, flags = re.S)
+
+
 
         # HARDEN: make style self-contained (pPr/rPr) to prevent font drift
         blk = materialize_arch_style_block(blk, sid, arch_styles_text)
@@ -2368,14 +1419,21 @@ def import_arch_styles_into_target(
 
         log.append(f"Imported style from architect: {sid}")
 
+    # Priority-1 hardening: if the architect template is missing any required style or dependency,
+    # fail fast rather than emitting a partially formatted output.
+    if missing:
+        missing_sorted = ", ".join(sorted(set(missing)))
+        raise ValueError(
+            "Architect styles.xml is missing required styleIds needed for Phase 2 import: "
+            f"{missing_sorted}"
+        )
+
     if not blocks:
         return
 
     tgt_new = insert_styles_into_styles_xml(tgt_styles_text, blocks)
     if tgt_new != tgt_styles_text:
         tgt_styles_path.write_text(tgt_new, encoding="utf-8")
-
-
 
 
 def insert_styles_into_styles_xml(styles_xml_text: str, style_blocks: List[str]) -> str:
@@ -2449,156 +1507,6 @@ def apply_pstyle_to_paragraph_block(p_xml: str, styleId: str) -> str:
     return p_xml
 
 
-def validate_instructions(instructions: Dict[str, Any]) -> None:
-    allowed_keys = {"create_styles", "apply_pStyle", "notes"}
-    extra = set(instructions.keys()) - allowed_keys
-    if extra:
-        raise ValueError(f"Invalid instruction keys: {extra}")
-
-    # Validate create_styles (LLM must NOT provide formatting; only exemplar mapping)
-    seen_style_ids = set()
-    for sd in instructions.get("create_styles", []):
-        if not isinstance(sd, dict):
-            raise ValueError("create_styles entries must be objects")
-
-        sid = sd.get("styleId")
-        if not sid or not isinstance(sid, str):
-            raise ValueError("create_styles entries must have styleId (string)")
-        if sid in seen_style_ids:
-            raise ValueError(f"Duplicate styleId: {sid}")
-        seen_style_ids.add(sid)
-
-        # LLM is forbidden from specifying formatting directly
-        if "pPr" in sd or "rPr" in sd or "pPr_inner" in sd or "rPr_inner" in sd:
-            raise ValueError(f"Style {sid}: LLM formatting fields are forbidden (pPr/rPr). Use derive_from_paragraph_index only.")
-
-        allowed_style_fields = {"styleId", "name", "type", "derive_from_paragraph_index", "basedOn", "role"}
-        extra_style_fields = set(sd.keys()) - allowed_style_fields
-        if extra_style_fields:
-            raise ValueError(f"Style {sid}: invalid fields: {extra_style_fields}")
-
-        stype = sd.get("type", "paragraph")
-        if stype != "paragraph":
-            raise ValueError(f"Style {sid}: only paragraph styles are supported (type='paragraph').")
-
-        src = sd.get("derive_from_paragraph_index")
-        if src is None or not isinstance(src, int) or src < 0:
-            raise ValueError(f"Style {sid}: derive_from_paragraph_index must be a non-negative integer.")
-
-        if "basedOn" in sd and sd["basedOn"] is not None and not isinstance(sd["basedOn"], str):
-            raise ValueError(f"Style {sid}: basedOn must be a string if provided.")
-
-        if "name" in sd and sd["name"] is not None and not isinstance(sd["name"], str):
-            raise ValueError(f"Style {sid}: name must be a string if provided.")
-
-        if "role" in sd and sd["role"] is not None and not isinstance(sd["role"], str):
-            raise ValueError(f"Style {sid}: role must be a string if provided.")
-
-    # Validate apply_pStyle
-    seen_para = set()
-    for ap in instructions.get("apply_pStyle", []):
-        if not isinstance(ap, dict):
-            raise ValueError("apply_pStyle entries must be objects")
-        idx = ap.get("paragraph_index")
-        sid = ap.get("styleId")
-        if not isinstance(idx, int) or idx < 0:
-            raise ValueError(f"Invalid paragraph_index: {idx}")
-        if not isinstance(sid, str):
-            raise ValueError(f"Invalid styleId for paragraph {idx}")
-        if idx in seen_para:
-            raise ValueError(f"Duplicate paragraph_index: {idx}")
-        seen_para.add(idx)
-
-
-def apply_instructions(extract_dir: Path, instructions: Dict[str, Any]) -> None:
-    validate_instructions(instructions)
-
-    # Stability snapshot before
-    snap = snapshot_stability(extract_dir)
-
-    # Load styles.xml and document.xml
-    styles_path = extract_dir / "word" / "styles.xml"
-    styles_text = styles_path.read_text(encoding="utf-8")
-
-    doc_path = extract_dir / "word" / "document.xml"
-    doc_text = doc_path.read_text(encoding="utf-8")
-
-    # Split document.xml into paragraph blocks
-    blocks = list(iter_paragraph_xml_blocks(doc_text))
-    para_blocks = [b[2] for b in blocks]
-    original_para_blocks = list(para_blocks)
-
-    # 1) Create derived styles (formatting captured locally from exemplar paragraphs)
-    style_defs = instructions.get("create_styles") or []
-    derived_blocks: List[str] = []
-    for sd in style_defs:
-        style_id = sd["styleId"]
-        style_name = sd.get("name") or style_id
-        src_idx = sd["derive_from_paragraph_index"]
-        based_on = sd.get("basedOn")
-
-        if src_idx >= len(para_blocks):
-            raise ValueError(f"Style {style_id}: derive_from_paragraph_index out of range: {src_idx}")
-
-        exemplar_p = para_blocks[src_idx]
-        derived_def = derive_style_def_from_paragraph(style_id, style_name, exemplar_p, based_on=based_on)
-        derived_blocks.append(build_style_xml_block(derived_def))
-
-    styles_new = insert_styles_into_styles_xml(styles_text, derived_blocks)
-    if styles_new != styles_text:
-        styles_path.write_text(styles_new, encoding="utf-8")
-
-    # 2) Apply paragraph styles by index (pStyle insertion ONLY)
-    apply_list = instructions.get("apply_pStyle") or []
-    idx_map: Dict[int, str] = {}
-    for item in apply_list:
-        idx = int(item["paragraph_index"])
-        sid = item["styleId"]
-        idx_map[idx] = sid
-
-    # Capture original pPr (minus pStyle) for drift detection
-    original_ppr = {i: ppr_without_pstyle(pb) for i, pb in enumerate(para_blocks)}
-
-    # Apply
-    for idx, sid in idx_map.items():
-        if idx < 0 or idx >= len(para_blocks):
-            raise ValueError(f"paragraph_index out of range: {idx}")
-        if paragraph_contains_sectpr(para_blocks[idx]):
-            raise ValueError(f"Refusing to apply style to paragraph {idx} because it contains sectPr.")
-        
-        pb = ensure_explicit_numpr_from_current_style(para_blocks[idx], styles_xml_text)
-        para_blocks[idx] = apply_pstyle_to_paragraph_block(pb, style_id)
-
-
-
-
-    # STEP 4: Full paragraph drift check (only pStyle may differ)
-    for idx in idx_map.keys():
-        before = strip_pstyle_from_paragraph(original_para_blocks[idx])
-        after = strip_pstyle_from_paragraph(para_blocks[idx])
-        if before != after:
-            raise ValueError(f"Paragraph drift detected at index {idx}: changes beyond <w:pStyle>.")
-
-    # Paragraph-level pPr drift check (only pStyle change allowed inside pPr)
-    for i, pb in enumerate(para_blocks):
-        if original_ppr[i] != ppr_without_pstyle(pb):
-            raise ValueError(f"Paragraph properties drift detected at index {i} (beyond w:pStyle).")
-
-    # Reassemble document.xml with updated paragraph blocks
-    out_parts: List[str] = []
-    last_end = 0
-    for i, (s, e, _p) in enumerate(blocks):
-        out_parts.append(doc_text[last_end:s])
-        out_parts.append(para_blocks[i])
-        last_end = e
-    out_parts.append(doc_text[last_end:])
-    doc_new = "".join(out_parts)
-    doc_path.write_text(doc_new, encoding="utf-8")
-
-    # Verify stability (headers/footers + sectPr + rels)
-    verify_stability(extract_dir, snap)
-
-
 def write_phase2_preflight(
     extract_dir: Path,
     arch_root: Path,
@@ -2634,8 +1542,6 @@ def sanitize_style_def(sd: Dict[str, Any]) -> Dict[str, Any]:
     clean = dict(sd)
     clean.pop("pPr", None)   # REMOVE paragraph formatting
     return clean
-
-
 
 
 def snapshot_doc_rels_hash(extract_dir: Path) -> str:

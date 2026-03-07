@@ -29,6 +29,40 @@ def patch_docx(
         else:
             rep_bytes[k] = v
 
+    # Phase 2 hard invariants — enforce at patch boundary
+    FORBIDDEN_PREFIXES = (
+        "word/header",
+        "word/footer",
+    )
+
+    FORBIDDEN_EXACT = set()
+
+    # Expanded to include environment parts
+    ALLOWED_PATCHES = {
+        "word/document.xml",
+        "word/styles.xml",
+        "word/theme/theme1.xml",
+        "word/numbering.xml",
+        "word/settings.xml",
+        "word/fontTable.xml",
+        "[Content_Types].xml",
+        "word/_rels/document.xml.rels",
+    }
+
+    for name in rep_bytes:
+        if name in FORBIDDEN_EXACT:
+            raise RuntimeError(f"Forbidden patch target: {name}")
+
+        if name.startswith(FORBIDDEN_PREFIXES):
+            raise RuntimeError(f"Forbidden patch target: {name}")
+
+        if name not in ALLOWED_PATCHES:
+            raise RuntimeError(
+                f"Illegal patch target: {name}\n"
+                f"Allowed: {sorted(ALLOWED_PATCHES)}"
+            )
+
+
     out_docx.parent.mkdir(parents=True, exist_ok=True)
     if out_docx.exists():
         out_docx.unlink()
@@ -39,14 +73,21 @@ def patch_docx(
             zout.comment = zin.comment
 
             src_names = set(zin.namelist())
-            missing = [name for name in rep_bytes.keys() if name not in src_names]
-            if missing:
-                raise FileNotFoundError(f"Replacement targets not found in docx: {missing}")
+            
+            # For new parts (like theme1.xml if it didn't exist), we'll add them
+            new_parts = [name for name in rep_bytes.keys() if name not in src_names]
+            existing_replacements = [name for name in rep_bytes.keys() if name in src_names]
+            
+            # Ensure we are not accidentally dropping entries
+            assert len(src_names) == len(zin.infolist())
 
             for info in zin.infolist():
                 name = info.filename
                 data = rep_bytes.get(name, zin.read(name))
 
                 # Preserve per-entry compression type where possible
-                # (Word doesn't require it, but this reduces drift)
                 zout.writestr(info, data, compress_type=info.compress_type)
+            
+            # Add any new parts that didn't exist in source
+            for new_name in new_parts:
+                zout.writestr(new_name, rep_bytes[new_name])
