@@ -1,342 +1,143 @@
-📘 README — Phase 2: MEP Specification Styling Engine
-Overview
+# Phase 2: MEP Specification Styling Engine
+
+## Overview
 
 Phase 2 applies architect-defined CSI paragraph styles to mechanical and plumbing specifications while preserving exact Word behavior and appearance.
 
-This phase does not design styles.
-It consumes styles produced by Phase 1 and applies them deterministically.
-
-The core principle is:
-
-Change as little Word XML as possible while achieving exact visual and behavioral alignment with the architect’s template.
-
-Inputs
-
-Phase 2 requires three inputs:
-
-Target MEP DOCX
-A mechanical or plumbing specification document (often inconsistent or poorly styled).
-
-Architect Style Registry
-Produced by Phase 1:
-
-arch_style_registry.json
-
-
-Phase 2 Classifications JSON
-Output from the LLM:
-
-{
-  "classifications": [
-    { "paragraph_index": 42, "csi_role": "PARAGRAPH" }
-  ]
-}
-
-Responsibilities (What Phase 2 Does)
-1. Extract DOCX Safely
-
-Unzips the DOCX into an editable workspace
-
-Preserves:
-
-headers
-
-footers
-
-w:sectPr
-
-numbering definitions
-
-2. Build Slim Bundle
-
-Sends only paragraph text + indices to the LLM
-
-No XML
-
-No formatting
-
-No styles
-
-3. Classify CSI Roles (LLM)
-
-The LLM:
-
-Assigns CSI semantic roles only
-
-Never references formatting
-
-Never creates styles
-
-Never guesses
-
-Allowed roles:
-
-SectionID
-SectionTitle
-PART
-ARTICLE
-PARAGRAPH
-SUBPARAGRAPH
-SUBSUBPARAGRAPH
-
-4. Load Architect Style Registry (STRICT)
-
-Reads arch_style_registry.json
-
-No heuristics
-
-No guessing
-
-Registry is the only source of truth
-
-If a role is missing → skip safely and log.
-
-5. Import Architect Styles
-
-Imports only styles actually used in the document
-
-Includes all basedOn dependencies
-
-Materializes inherited properties:
-
-<w:rPr> (font, size, etc.)
-
-<w:pPr> (spacing, alignment)
-
-Does not:
-
-modify numbering definitions
-
-modify base styles
-
-6. Preserve Dynamic Word Numbering
-
-Before swapping w:pStyle, Phase 2:
-
-Detects if numbering comes from the current style
-
-Copies <w:numPr> from the style chain onto the paragraph
-
-Ensures:
-
-Pressing Enter continues a / b / c, 1 / 2 / 3, etc.
-
-This is critical for Word usability.
-
-7. Apply Styles
-
-Applies architect styles using only w:pStyle
-
-Never edits runs
-
-Never invents formatting
-
-8. Verify Stability
-
-Confirms headers, footers, and sectPr are unchanged
-
-Fails loudly if invariants are violated
-
-9. Optional Outputs
-
---rebuild-docx → rebuild final DOCX
-
---write-analysis → debug markdown (off by default)
-
-Explicit Non-Goals
-
-Phase 2 does not:
-
-Create styles
-
-Fix bad architect templates
-
-Modify numbering.xml
-
-Apply run-level formatting
-
-Reconstruct DOCX XML
-
-Infer style intent
-
-Merge Phase 1 logic
-
-Relationship to Phase 1
-Phase	Responsibility
-Phase 1	Defines and labels architect intent
-Phase 2	Applies that intent to MEP specs
-
-Phase 1 emits:
-
-arch_style_registry.json
-
-
-Phase 2 consumes it verbatim.
-
-Philosophy
-
-Word is stateful, undocumented, and fragile.
-We respect it by touching as little as possible.
-
-⚠️ Known Invariants & Failure Modes
-
-This document defines what must never break, and what to watch for when it does.
-
-🔒 Hard Invariants (Must Always Hold)
-
-If any of these break, the run is invalid.
-
-1. Headers / Footers Unchanged
-
-No XML drift
-
-No relationship changes
-
-2. w:sectPr Untouched
-
-No page setup changes
-
-No section breaks altered
-
-3. Numbering Definitions Untouched
-
-numbering.xml is never edited
-
-All numbering preservation happens at paragraph-level only
-
-4. No Run-Level Formatting
-
-No <w:rPr> edits inside document.xml
-
-All formatting via paragraph styles only
-
-5. Registry-Only Styling
-
-No guessing style IDs
-
-No scanning styles.xml heuristically
-
-Missing role → skip + log
-
-⚠️ Known Failure Modes (And Why They Happen)
-1. Numbering Stops When Pressing Enter
-
-Cause
-
-Numbering was style-linked
-
-w:pStyle was swapped without materializing <w:numPr>
-
-Fix
-
-Ensure ensure_explicit_numpr_from_current_style() runs before restyling
-
-2. Fonts Change After Styling
-
-Cause
-
-Architect style relied on inheritance / docDefaults
-
-Imported style lacked explicit <w:rPr>
-
-Fix
-
-Materialize effective <w:rPr> and <w:pPr> when importing styles
-
-3. Some Paragraphs Don’t Get Styled
-
-Cause
-
-Role missing from registry
-
-Role intentionally skipped (e.g., SKIP, END_OF_SECTION)
-
-Fix
-
-Expected behavior
-
-Logged in preflight
-
-4. Architect Template Uses Only “Normal”
-
-Cause
-
-Architect never defined styles
-
-Phase 1 Responsibility
-
-Derive styles from exemplars anyway
-
-Registry still emitted
-
-Phase 2 Behavior
-
-Works normally once registry exists
-
-5. Word Opens With “Repair” Warning
-
-Cause
-
-Invalid XML insertion
-
-Broken style dependency chain
-
-Fix
-
-Check:
-
-imported style blocks are intact
-
-all basedOn styles imported
-
-no workspace artifacts zipped into DOCX
-
-🧪 Acceptance Checklist (Before Cleanup)
-
-Before trimming code further, confirm:
-
- Lists continue correctly on Enter
-
- Fonts match architect intent
-
- Styles pane shows CSI_*__ARCH styles
-
- No extra files produced by default
-
- Preflight reports only expected unmapped roles
-
- Word opens cleanly without warnings
-
-📉 Cleanup Guidance (Future)
-
-When trimming Phase 2:
-
-Remove:
-
-heuristic code paths
-
-legacy analysis reports
-
-unused CLI modes
-
-Keep:
-
-extract
-
-classify
-
-import styles
-
-apply styles
-
-verify invariants
-
+This phase does not design styles. It consumes styles produced by Phase 1 and applies them deterministically.
+
+**Core principle:** Change as little Word XML as possible while achieving exact visual and behavioral alignment with the architect's template.
+
+## Quick Start
+
+### Automated Pipeline (Recommended)
+
+```bash
+python docx_decomposer.py target.docx \
+  --phase2-arch-extract NVES_extracted/ \
+  --classify \
+  --api-key YOUR_API_KEY
+```
+
+This runs the full pipeline: extract → build bundle → LLM classify → apply → format.
+
+### GUI
+
+```bash
+python gui.py
+```
+
+The GUI provides file/folder pickers, batch processing, and real-time progress logging. Batch mode processes all `.docx` files in a folder sequentially.
+
+### Manual Pipeline (Two-Step)
+
+**Step 1: Build LLM input bundle**
+```bash
+python docx_decomposer.py target.docx \
+  --phase2-arch-extract NVES_extracted/ \
+  --phase2-build-bundle
+```
+
+**Step 2: Apply LLM classifications**
+```bash
+python docx_decomposer.py target.docx \
+  --phase2-arch-extract NVES_extracted/ \
+  --phase2-classifications phase2_classifications.json \
+  --output-docx output.docx
+```
+
+### CLI Flags
+
+| Flag | Description |
+|------|-------------|
+| `--phase2-arch-extract DIR` | Architect extracted template folder |
+| `--phase2-build-bundle` | Build slim bundle for manual LLM classification |
+| `--phase2-classifications JSON` | Apply pre-computed LLM classifications |
+| `--classify` | Run full automated pipeline (requires API key) |
+| `--api-key KEY` | Anthropic API key (or set `ANTHROPIC_API_KEY` env var) |
+| `--model MODEL` | LLM model (default: `claude-sonnet-4-20250514`) |
+| `--phase2-discipline TYPE` | `mechanical` or `plumbing` (default: `mechanical`) |
+| `--output-docx PATH` | Output DOCX path |
+| `--use-extract-dir DIR` | Reuse existing extracted folder |
+| `--extract-dir DIR` | Specify extraction location |
+
+## Installation
+
+```bash
+pip install -r requirements.txt
+```
+
+Runtime dependency: `anthropic>=0.40.0` (for automated classification).
+
+For development:
+```bash
+pip install -r requirements-dev.txt
+```
+
+For PyInstaller packaging:
+```bash
+pip install -r requirements-build.txt
+```
+
+## Inputs
+
+1. **Target MEP DOCX** — A mechanical or plumbing specification document
+2. **Architect Template Folder** — Extracted folder from Phase 1, containing:
+   - `arch_style_registry.json` — CSI role → style ID mapping
+   - `arch_template_registry.json` — Complete formatting environment
+   - `word/styles.xml`, `word/numbering.xml`, etc.
+3. **API Key** (for automated classification) — Anthropic API key
+
+## What Phase 2 Does
+
+1. **Extracts** the target DOCX safely
+2. **Applies formatting environment** (theme, fonts, settings, docDefaults) from the architect template
+3. **Imports numbering definitions** with ID collision avoidance
+4. **Imports architect styles** with property materialization for cross-document portability
+5. **Builds a slim bundle** of paragraph text for LLM classification
+6. **Classifies paragraphs** via LLM into CSI semantic roles
+7. **Applies styles** using only `w:pStyle` — no run-level formatting
+8. **Strips run-level fonts** so paragraph styles take effect
+9. **Verifies stability** of headers, footers, sectPr, and relationships
+10. **Patches output DOCX** via surgical ZIP replacement
+
+## CSI Roles
+
+| Role | Description |
+|------|-------------|
+| `SectionID` | Section number line (e.g., "SECTION 23 05 13") |
+| `SectionTitle` | Section name line |
+| `PART` | Part headings (PART 1, PART 2, PART 3) |
+| `ARTICLE` | Article numbers (1.01, 2.03) |
+| `PARAGRAPH` | Lettered paragraphs (A., B., C.) |
+| `SUBPARAGRAPH` | Numbered under letters (1., 2., 3.) |
+| `SUBSUBPARAGRAPH` | Lettered under numbers (a., b., c.) |
+
+## Hard Invariants
+
+1. **Headers/footers unchanged** — no XML drift, no relationship changes
+2. **`w:sectPr` untouched** — no page setup or section break changes
+3. **Numbering definitions untouched** — `numbering.xml` only modified by the numbering importer
+4. **Registry-only styling** — no guessing style IDs; missing role = skip + log
+
+## Testing
+
+```bash
+python -m pytest tests/ -v
+```
+
+## Known Failure Modes
+
+1. **Numbering stops on Enter** — Fixed by `ensure_explicit_numpr_from_current_style()` before restyling
+2. **Fonts change after styling** — Fixed by materializing effective properties during import
+3. **Some paragraphs not styled** — Expected when role is missing from registry (logged in preflight)
+4. **Word "Repair" warning** — Check: style blocks intact, all dependencies imported, no artifacts in DOCX
 
 ## Copyright Notice
 
-**Copyright © 2025 Abraham Borg. All Rights Reserved.**
+**Copyright (c) 2025 Abraham Borg. All Rights Reserved.**
 
-This software and associated documentation files (the "Software") are the proprietary property of Abraham Borg. 
+This software and associated documentation files (the "Software") are the proprietary property of Abraham Borg.
 
 **Unauthorized copying, modification, distribution, or use of this Software, via any medium, is strictly prohibited without express written permission from the copyright holder.**
 
