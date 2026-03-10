@@ -1,0 +1,430 @@
+"""
+Style extraction, materialization, and import for Phase 2.
+
+Handles importing architect styles into target documents with
+property materialization for cross-document portability.
+"""
+
+import re
+from pathlib import Path
+from typing import Dict, List, Set, Optional
+
+
+def _extract_style_block(styles_xml_text: str, style_id: str) -> Optional[str]:
+    m = re.search(
+        rf'(<w:style\b[^>]*w:styleId="{re.escape(style_id)}"[\s\S]*?</w:style>)',
+        styles_xml_text,
+        flags=re.S
+    )
+    return m.group(1) if m else None
+
+
+def _extract_basedOn(style_block: str) -> Optional[str]:
+    m = re.search(r'<w:basedOn\b[^>]*w:val="([^"]+)"', style_block)
+    return m.group(1) if m else None
+
+
+def _extract_numpr_block(style_block: str) -> Optional[str]:
+    m = re.search(r'(<w:numPr\b[^>]*>[\s\S]*?</w:numPr>)', style_block, flags=re.S)
+    return m.group(1) if m else None
+
+
+def _find_style_numpr_in_chain(styles_xml_text: str, style_id: str, max_hops: int = 50) -> Optional[str]:
+    seen = set()
+    cur = style_id
+    hops = 0
+    while cur and cur not in seen and hops < max_hops:
+        seen.add(cur)
+        hops += 1
+        block = _extract_style_block(styles_xml_text, cur)
+        if not block:
+            break
+        numpr = _extract_numpr_block(block)
+        if numpr:
+            return numpr
+        cur = _extract_basedOn(block)
+    return None
+
+
+def ensure_explicit_numpr_from_current_style(p_xml: str, styles_xml_text: str) -> str:
+    # never touch sectPr carrier paragraphs
+    if "<w:sectPr" in p_xml:
+        return p_xml
+
+    if _paragraph_has_numpr(p_xml):
+        return p_xml
+
+    cur_style = _paragraph_style_id(p_xml)
+    if not cur_style:
+        return p_xml
+
+    numpr = _find_style_numpr_in_chain(styles_xml_text, cur_style)
+    if not numpr:
+        return p_xml
+
+    # Prefer placing numPr right after existing pStyle (if present)
+    if re.search(r'(<w:pStyle\b[^>]*/>)', p_xml):
+        return re.sub(r'(<w:pStyle\b[^>]*/>)', rf"\1{numpr}", p_xml, count=1)
+
+    # Expand self-closing pPr
+    if re.search(r"<w:pPr\b[^>]*/>", p_xml):
+        return re.sub(r"<w:pPr\b[^>]*/>", f"<w:pPr>{numpr}</w:pPr>", p_xml, count=1)
+
+    # Insert into existing pPr
+    if "<w:pPr" in p_xml:
+        return re.sub(r'(<w:pPr\b[^>]*>)', rf"\1{numpr}", p_xml, count=1)
+
+    # Create pPr if missing
+    return re.sub(r'(<w:p\b[^>]*>)', rf"\1<w:pPr>{numpr}</w:pPr>", p_xml, count=1)
+
+
+def _paragraph_style_id(p_xml: str) -> Optional[str]:
+    m = re.search(r'<w:pStyle\b[^>]*w:val="([^"]+)"', p_xml)
+    return m.group(1) if m else None
+
+
+def _paragraph_has_numpr(p_xml: str) -> bool:
+    return "<w:numPr" in p_xml
+
+
+def _strip_pstyle_and_numpr(ppr_inner: str) -> str:
+    if not ppr_inner:
+        return ""
+    out = re.sub(r"<w:pStyle\b[^>]*/>", "", ppr_inner)
+    out = re.sub(r"<w:numPr\b[^>]*>[\s\S]*?</w:numPr>", "", out, flags=re.S)
+    return out.strip()
+
+
+def _extract_tag_inner(xml: str, tag: str) -> Optional[str]:
+    m = re.search(rf"<{tag}\b[^>]*>([\s\S]*?)</{tag}>", xml, flags=re.S)
+    return m.group(1) if m else None
+
+
+def _docdefaults_rpr_inner(styles_xml_text: str) -> str:
+    m = re.search(
+        r"<w:docDefaults\b[\s\S]*?<w:rPrDefault\b[\s\S]*?<w:rPr\b[^>]*>([\s\S]*?)</w:rPr>[\s\S]*?</w:rPrDefault>",
+        styles_xml_text,
+        flags=re.S
+    )
+    return m.group(1).strip() if m else ""
+
+
+def _docdefaults_ppr_inner(styles_xml_text: str) -> str:
+    m = re.search(
+        r"<w:docDefaults\b[\s\S]*?<w:pPrDefault\b[\s\S]*?<w:pPr\b[^>]*>([\s\S]*?)</w:pPr>[\s\S]*?</w:pPrDefault>",
+        styles_xml_text,
+        flags=re.S
+    )
+    return _strip_pstyle_and_numpr(m.group(1).strip()) if m else ""
+
+
+def _effective_rpr_inner_in_arch(arch_styles_xml_text: str, style_id: str) -> str:
+    """
+    Return a *minimal* effective rPr inner XML for the FORCE typography set only.
+
+    We resolve each child tag independently through the basedOn chain, then fall back
+    to docDefaults. This avoids the bug where a derived style contains <w:rPr> but
+    doesn't specify (for example) <w:rFonts>, causing inherited font settings to be missed.
+    """
+    force_tags = ("rFonts", "sz", "szCs", "lang")
+
+    def _extract_child_node(inner_xml: str, tag: str) -> Optional[str]:
+        if not inner_xml:
+            return None
+        # Self-closing: <w:tag .../>
+        m = re.search(rf"(<w:{re.escape(tag)}\b[^>]*/>)", inner_xml)
+        if m:
+            return m.group(1)
+        # Paired: <w:tag ...>...</w:tag>
+        m = re.search(
+            rf"(<w:{re.escape(tag)}\b[^>]*>[\s\S]*?</w:{re.escape(tag)}>)",
+            inner_xml,
+            flags=re.S
+        )
+        if m:
+            return m.group(1)
+        return None
+
+    def _resolve(tag: str) -> Optional[str]:
+        seen = set()
+        cur = style_id
+        hops = 0
+        while cur and cur not in seen and hops < 50:
+            seen.add(cur)
+            hops += 1
+            blk = _extract_style_block(arch_styles_xml_text, cur)
+            if not blk:
+                break
+            rpr_inner = _extract_tag_inner(blk, "w:rPr") or ""
+            node = _extract_child_node(rpr_inner, tag)
+            if node:
+                return node
+            cur = _extract_basedOn(blk)
+
+        # fall back to docDefaults
+        docdef_inner = _docdefaults_rpr_inner(arch_styles_xml_text)
+        return _extract_child_node(docdef_inner, tag)
+
+    nodes: List[str] = []
+    for t in force_tags:
+        node = _resolve(t)
+        if node:
+            nodes.append(node)
+
+    return "".join(nodes)
+
+
+def _effective_ppr_inner_in_arch(arch_styles_xml_text: str, style_id: str) -> str:
+    seen = set()
+    cur = style_id
+    hops = 0
+    while cur and cur not in seen and hops < 50:
+        seen.add(cur); hops += 1
+        blk = _extract_style_block(arch_styles_xml_text, cur)
+        if not blk:
+            break
+        inner = _extract_tag_inner(blk, "w:pPr") or ""
+        inner = _strip_pstyle_and_numpr(inner)
+        if inner:
+            return inner
+        cur = _extract_basedOn(blk)
+    return _docdefaults_ppr_inner(arch_styles_xml_text)
+
+
+def _rpr_contains_tag(rpr_inner: str, tag: str) -> bool:
+    return re.search(rf"<w:{re.escape(tag)}\b", rpr_inner) is not None
+
+
+def _extract_rpr_inner(style_block: str) -> Optional[str]:
+    return _extract_tag_inner(style_block, "w:rPr")
+
+
+def _inject_missing_rpr_children(style_block: str, missing_children_xml: str) -> str:
+    """Insert missing rPr children (already as raw XML) just before </w:rPr>."""
+    if not missing_children_xml.strip():
+        return style_block
+    if "</w:rPr>" not in style_block:
+        return style_block
+    # Replace only the first closing tag (avoid accidental insertion into nested rPr blocks)
+    return style_block.replace("</w:rPr>", f"{missing_children_xml}</w:rPr>", 1)
+
+
+def _materialize_minimal_typography(style_block: str, style_id: str, arch_styles_xml_text: str) -> str:
+    """
+    Make imported styles resilient across documents by ensuring a minimal set of
+    typography-related rPr children exist (fonts, sizes, language).
+
+    IMPORTANT:
+    - Does NOT invent values.
+    - Only copies missing nodes from the *effective* arch style chain + docDefaults.
+    - Avoids rewriting the whole block.
+    """
+    eff_rpr = _effective_rpr_inner_in_arch(arch_styles_xml_text, style_id).strip()
+    if not eff_rpr:
+        return style_block
+
+    # If the style has no rPr at all, inject the minimal effective rPr.
+    if "<w:rPr" not in style_block:
+        return style_block.replace(
+            "</w:style>",
+            f"\n  <w:rPr>{eff_rpr}</w:rPr>\n</w:style>"
+        )
+
+    # Expand self-closing rPr to open/close so we can inject children.
+    if re.search(r"<w:rPr\b[^>]*/>", style_block):
+        style_block = re.sub(r"<w:rPr\b[^>]*/>", "<w:rPr></w:rPr>", style_block, count=1)
+
+    cur_rpr = _extract_rpr_inner(style_block) or ""
+
+    missing_nodes: List[str] = []
+
+    def _get_child_node(tag: str) -> Optional[str]:
+        # self-closing or paired tags, searched within eff_rpr
+        m = re.search(rf"(<w:{tag}\b[^>]*/>)", eff_rpr)
+        if m:
+            return m.group(1)
+        m = re.search(rf"(<w:{tag}\b[^>]*>[\s\S]*?</w:{tag}>)", eff_rpr, flags=re.S)
+        if m:
+            return m.group(1)
+        return None
+
+    for tag in ["rFonts", "sz", "szCs", "lang"]:
+        if _rpr_contains_tag(cur_rpr, tag):
+            continue
+        node = _get_child_node(tag)
+        if node:
+            missing_nodes.append(node)
+
+    if not missing_nodes:
+        return style_block
+
+    insertion = "".join(missing_nodes)
+    return _inject_missing_rpr_children(style_block, insertion)
+
+
+def materialize_arch_style_block(style_block: str, style_id: str, arch_styles_xml_text: str) -> str:
+    """
+    Phase 2: import-time style hardening.
+
+    Goal: ensure styles imported from the architect template remain visually stable
+    when applied in a different document, without touching runs or numbering.xml.
+
+    Strategy:
+    - Inject pPr only for paragraph styles, and only if missing entirely.
+    - Materialize a minimal typography FORCE set into rPr:
+        w:rFonts, w:sz, w:szCs, w:lang
+      Values are copied from the *effective* architect chain + docDefaults.
+    """
+    m = re.search(r'<w:style\b[^>]*w:type="([^"]+)"', style_block)
+    stype = m.group(1) if m else None
+
+    # Inject pPr only if missing entirely (paragraph styles only)
+    if stype == "paragraph" and "<w:pPr" not in style_block:
+        effp = _effective_ppr_inner_in_arch(arch_styles_xml_text, style_id)
+        if effp.strip():
+            style_block = style_block.replace(
+                "</w:style>",
+                f"\n  <w:pPr>{effp}</w:pPr>\n</w:style>"
+            )
+
+    # Typography materialization
+    style_block = _materialize_minimal_typography(style_block, style_id, arch_styles_xml_text)
+
+    return style_block
+
+
+def _collect_style_deps_from_arch(arch_styles_text: str, style_id: str, seen: Set[str]) -> None:
+    """
+    Recursively collect styleId dependencies via <w:basedOn w:val="..."/>.
+    """
+    if style_id in seen:
+        return
+    seen.add(style_id)
+
+    blk = extract_style_block_raw(arch_styles_text, style_id)
+    if not blk:
+        return
+
+    m = re.search(r'<w:basedOn\b[^>]*w:val="([^"]+)"', blk)
+    if m:
+        base = m.group(1)
+        if base and base not in seen:
+            _collect_style_deps_from_arch(arch_styles_text, base, seen)
+
+
+def extract_style_block_raw(styles_xml_text: str, style_id: str) -> Optional[str]:
+    """
+    Extract the raw <w:style ...>...</w:style> block for a given styleId using regex.
+    This avoids ET rewriting / reformatting.
+    """
+    # styleId can include characters that need escaping in regex
+    sid = re.escape(style_id)
+    m = re.search(rf'(<w:style\b[^>]*w:styleId="{sid}"[^>]*>[\s\S]*?</w:style>)', styles_xml_text)
+    return m.group(1) + "\n" if m else None
+
+
+def import_arch_styles_into_target(
+    target_extract_dir: Path,
+    arch_extract_dir: Path,
+    needed_style_ids: List[str],
+    log: List[str],
+    style_numid_remap: Optional[Dict[str, Dict[str, int]]] = None
+) -> None:
+    """
+    Copy specific style blocks from architect styles.xml into target styles.xml (idempotent),
+    including basedOn dependencies.
+    """
+    from core.registry import resolve_arch_extract_root
+
+    arch_extract_dir = resolve_arch_extract_root(arch_extract_dir)
+
+    arch_styles_path = arch_extract_dir / "word" / "styles.xml"
+    tgt_styles_path = target_extract_dir / "word" / "styles.xml"
+
+    arch_styles_text = arch_styles_path.read_text(encoding="utf-8")
+    tgt_styles_text = tgt_styles_path.read_text(encoding="utf-8")
+
+    existing = set(re.findall(r'w:styleId="([^"]+)"', tgt_styles_text))
+
+    # Expand basedOn deps
+    expanded: Set[str] = set()
+    for sid in needed_style_ids:
+        _collect_style_deps_from_arch(arch_styles_text, sid, expanded)
+
+    blocks: List[str] = []
+    missing: List[str] = []
+    for sid in sorted(expanded):
+        if sid in existing:
+            continue
+
+        blk = extract_style_block_raw(arch_styles_text, sid)
+        if not blk:
+            missing.append(sid)
+            continue
+
+        # handle numPr: remap if we have mapping, otherwise strip
+        if "<w:numPr" in blk:
+            if style_numid_remap and sid in style_numid_remap:
+                # remap numId to the imported numbering
+                remap = style_numid_remap[sid]
+                old_num_id = remap["old_numId"]
+                new_num_id = remap["new_numId"]
+                blk = re.sub(
+                    r'(<w:numId\s+w:val=")' + str(old_num_id) + r'"',
+                    rf'\g<1>{new_num_id}"',
+                    blk
+                )
+                log.append(f"Remapped numId {old_num_id} -> {new_num_id} in style: {sid}")
+            else:
+                # No remap available, strip numPr to avoid broken references
+                log.append(f"WARNING: Stripped <w:numPr> from imported style: {sid}")
+                blk = re.sub(r"<w:numPr\b[^>]*>[\s\S]*?</w:numPr>", "", blk, flags = re.S)
+
+        # HARDEN: make style self-contained (pPr/rPr) to prevent font drift
+        blk = materialize_arch_style_block(blk, sid, arch_styles_text)
+
+        blocks.append(blk)
+
+        log.append(f"Imported style from architect: {sid}")
+
+    # Priority-1 hardening: if the architect template is missing any required style or dependency,
+    # fail fast rather than emitting a partially formatted output.
+    if missing:
+        missing_sorted = ", ".join(sorted(set(missing)))
+        raise ValueError(
+            "Architect styles.xml is missing required styleIds needed for Phase 2 import: "
+            f"{missing_sorted}"
+        )
+
+    if not blocks:
+        return
+
+    tgt_new = insert_styles_into_styles_xml(tgt_styles_text, blocks)
+    if tgt_new != tgt_styles_text:
+        tgt_styles_path.write_text(tgt_new, encoding="utf-8")
+
+
+def insert_styles_into_styles_xml(styles_xml_text: str, style_blocks: List[str]) -> str:
+    if not style_blocks:
+        return styles_xml_text
+
+    # Idempotence: skip inserting styles that already exist in styles.xml
+    existing = set(re.findall(r'w:styleId="([^"]+)"', styles_xml_text))
+    filtered: List[str] = []
+    for sb in style_blocks:
+        m = re.search(r'w:styleId="([^"]+)"', sb)
+        if not m:
+            raise ValueError("Style block missing w:styleId")
+        sid = m.group(1)
+        if sid in existing:
+            continue
+        filtered.append(sb)
+
+    if not filtered:
+        return styles_xml_text
+
+    insert_point = styles_xml_text.rfind("</w:styles>")
+    if insert_point == -1:
+        raise ValueError("styles.xml does not contain </w:styles>")
+    insertion = "\n" + "\n".join(filtered) + "\n"
+    return styles_xml_text[:insert_point] + insertion + styles_xml_text[insert_point:]
