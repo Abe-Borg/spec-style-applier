@@ -34,6 +34,8 @@ import re
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+from core.registry import _check_xml_fragment
+
 
 # ─────────────────────────────────────────────────────────────────────────────
 # docDefaults application
@@ -207,6 +209,121 @@ def _ensure_theme_in_rels(extract_dir: Path, log: List[str]) -> None:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# Settings plumbing helpers
+# ─────────────────────────────────────────────────────────────────────────────
+
+_MINIMAL_SETTINGS_XML = (
+    '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n'
+    '<w:settings xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"'
+    ' xmlns:m="http://schemas.openxmlformats.org/officeDocument/2006/math"'
+    ' xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">'
+    '\n</w:settings>'
+)
+
+
+def _ensure_settings_in_content_types(extract_dir: Path, log: List[str]) -> None:
+    """Ensure [Content_Types].xml has an entry for settings.xml."""
+    ct_path = extract_dir / "[Content_Types].xml"
+    if not ct_path.exists():
+        return
+
+    ct_xml = ct_path.read_text(encoding="utf-8")
+
+    if 'PartName="/word/settings.xml"' in ct_xml:
+        return
+
+    settings_override = (
+        '<Override PartName="/word/settings.xml" '
+        'ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.settings+xml"/>'
+    )
+
+    if "</Types>" in ct_xml:
+        ct_xml = ct_xml.replace("</Types>", f"  {settings_override}\n</Types>")
+        ct_path.write_text(ct_xml, encoding="utf-8")
+        log.append("Added settings.xml to [Content_Types].xml")
+
+
+def _ensure_settings_in_rels(extract_dir: Path, log: List[str]) -> None:
+    """Ensure word/_rels/document.xml.rels has a relationship for settings."""
+    rels_path = extract_dir / "word" / "_rels" / "document.xml.rels"
+    if not rels_path.exists():
+        return
+
+    rels_xml = rels_path.read_text(encoding="utf-8")
+
+    if 'Target="settings.xml"' in rels_xml:
+        return
+
+    rids = re.findall(r'Id="rId(\d+)"', rels_xml)
+    max_rid = max(int(r) for r in rids) if rids else 0
+    new_rid = f"rId{max_rid + 1}"
+
+    settings_rel = (
+        f'<Relationship Id="{new_rid}" '
+        f'Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/settings" '
+        f'Target="settings.xml"/>'
+    )
+
+    if "</Relationships>" in rels_xml:
+        rels_xml = rels_xml.replace("</Relationships>", f"  {settings_rel}\n</Relationships>")
+        rels_path.write_text(rels_xml, encoding="utf-8")
+        log.append(f"Added settings relationship ({new_rid}) to document.xml.rels")
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Font table plumbing helpers
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _ensure_font_table_in_content_types(extract_dir: Path, log: List[str]) -> None:
+    """Ensure [Content_Types].xml has an entry for fontTable.xml."""
+    ct_path = extract_dir / "[Content_Types].xml"
+    if not ct_path.exists():
+        return
+
+    ct_xml = ct_path.read_text(encoding="utf-8")
+
+    if 'PartName="/word/fontTable.xml"' in ct_xml:
+        return
+
+    font_override = (
+        '<Override PartName="/word/fontTable.xml" '
+        'ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.fontTable+xml"/>'
+    )
+
+    if "</Types>" in ct_xml:
+        ct_xml = ct_xml.replace("</Types>", f"  {font_override}\n</Types>")
+        ct_path.write_text(ct_xml, encoding="utf-8")
+        log.append("Added fontTable.xml to [Content_Types].xml")
+
+
+def _ensure_font_table_in_rels(extract_dir: Path, log: List[str]) -> None:
+    """Ensure word/_rels/document.xml.rels has a relationship for fontTable."""
+    rels_path = extract_dir / "word" / "_rels" / "document.xml.rels"
+    if not rels_path.exists():
+        return
+
+    rels_xml = rels_path.read_text(encoding="utf-8")
+
+    if 'Target="fontTable.xml"' in rels_xml:
+        return
+
+    rids = re.findall(r'Id="rId(\d+)"', rels_xml)
+    max_rid = max(int(r) for r in rids) if rids else 0
+    new_rid = f"rId{max_rid + 1}"
+
+    font_rel = (
+        f'<Relationship Id="{new_rid}" '
+        f'Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/fontTable" '
+        f'Target="fontTable.xml"/>'
+    )
+
+    if "</Relationships>" in rels_xml:
+        rels_xml = rels_xml.replace("</Relationships>", f"  {font_rel}\n</Relationships>")
+        rels_path.write_text(rels_xml, encoding="utf-8")
+        log.append(f"Added fontTable relationship ({new_rid}) to document.xml.rels")
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # Settings/compat application
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -217,30 +334,44 @@ def apply_settings(
 ) -> None:
     """
     Apply settings.xml from registry, focusing on compat flags.
-    
+
     Compat flags affect rendering behavior (list spacing, line breaking, etc.)
     and can cause subtle visual differences if not matched.
+
+    If the target lacks settings.xml, a minimal valid part is created and
+    wired into [Content_Types].xml and document.xml.rels idempotently.
+    Malformed compat_xml is rejected before any mutation.
     """
     settings_data = registry.get("settings", {})
-    
+
     # For now, we focus on compat flags rather than replacing entire settings.xml
     # (full replacement could break other document-specific settings)
-    
+
     compat_xml = settings_data.get("compat", {}).get("compat_xml")
     if not compat_xml:
         log.append("No compat flags in registry; skipping settings application")
         return
-    
+
+    # Validate compat_xml before any mutation
+    err = _check_xml_fragment(compat_xml, "w:compat")
+    if err:
+        log.append(f"WARNING: Skipping compat application — {err}")
+        return
+
     settings_path = target_extract_dir / "word" / "settings.xml"
     if not settings_path.exists():
-        log.append("Target has no settings.xml; skipping compat application")
-        return
-    
+        # Create minimal settings.xml and wire package plumbing
+        settings_path.parent.mkdir(parents=True, exist_ok=True)
+        settings_path.write_text(_MINIMAL_SETTINGS_XML, encoding="utf-8")
+        _ensure_settings_in_content_types(target_extract_dir, log)
+        _ensure_settings_in_rels(target_extract_dir, log)
+        log.append("Created minimal settings.xml (none existed in target)")
+
     settings_xml = settings_path.read_text(encoding="utf-8")
-    
+
     # Find and replace existing <w:compat> block
     existing_compat = re.search(r'<w:compat\b[\s\S]*?</w:compat>', settings_xml)
-    
+
     if existing_compat:
         settings_xml = settings_xml.replace(existing_compat.group(0), compat_xml, 1)
         log.append("Replaced compat flags with architect values")
@@ -252,8 +383,14 @@ def apply_settings(
                 f"  {compat_xml}\n</w:settings>"
             )
             log.append("Inserted compat flags from architect")
-    
+
     settings_path.write_text(settings_xml, encoding="utf-8")
+
+    # Post-mutation validation
+    final_xml = settings_path.read_text(encoding="utf-8")
+    post_err = _check_xml_fragment(final_xml, "w:settings")
+    if post_err:
+        log.append(f"WARNING: settings.xml may be malformed after mutation — {post_err}")
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -267,50 +404,62 @@ def apply_font_table(
 ) -> None:
     """
     Merge font declarations from registry into target fontTable.xml.
-    
+
     This ensures fonts referenced by architect styles are declared,
     which helps Word resolve them correctly.
+
+    If the target has no fontTable.xml, the architect's font table is
+    copied and [Content_Types].xml / document.xml.rels are wired
+    idempotently.  The result is validated after mutation.
     """
     fonts_data = registry.get("fonts", {})
     arch_font_xml = fonts_data.get("font_table_xml")
-    
+
     if not arch_font_xml:
         log.append("No fontTable in registry; skipping font table application")
         return
-    
+
     font_path = target_extract_dir / "word" / "fontTable.xml"
-    
+
     if not font_path.exists():
-        # Just copy the architect's font table
+        # Copy the architect's font table and wire package plumbing
+        font_path.parent.mkdir(parents=True, exist_ok=True)
         font_path.write_text(arch_font_xml, encoding="utf-8")
-        log.append("Added fontTable.xml from architect")
-        return
-    
-    # Merge: add fonts from architect that don't exist in target
-    target_font_xml = font_path.read_text(encoding="utf-8")
-    
-    # Extract font names from both
-    target_fonts = set(re.findall(r'<w:font\s+w:name="([^"]+)"', target_font_xml))
-    arch_fonts = re.findall(r'(<w:font\s+w:name="([^"]+)"[\s\S]*?</w:font>)', arch_font_xml)
-    
-    fonts_to_add = []
-    for font_block, font_name in arch_fonts:
-        if font_name not in target_fonts:
-            fonts_to_add.append(font_block)
-    
-    if not fonts_to_add:
-        log.append("All architect fonts already present in target fontTable")
-        return
-    
-    # Insert before </w:fonts>
-    if "</w:fonts>" in target_font_xml:
-        insertion = "\n".join(fonts_to_add)
-        target_font_xml = target_font_xml.replace(
-            "</w:fonts>",
-            f"{insertion}\n</w:fonts>"
-        )
-        font_path.write_text(target_font_xml, encoding="utf-8")
-        log.append(f"Added {len(fonts_to_add)} font declarations from architect")
+        _ensure_font_table_in_content_types(target_extract_dir, log)
+        _ensure_font_table_in_rels(target_extract_dir, log)
+        log.append("Added fontTable.xml from architect (with content types and rels)")
+    else:
+        # Merge: add fonts from architect that don't exist in target
+        target_font_xml = font_path.read_text(encoding="utf-8")
+
+        # Extract font names from both
+        target_fonts = set(re.findall(r'<w:font\s+w:name="([^"]+)"', target_font_xml))
+        arch_fonts = re.findall(r'(<w:font\s+w:name="([^"]+)"[\s\S]*?</w:font>)', arch_font_xml)
+
+        fonts_to_add = []
+        for font_block, font_name in arch_fonts:
+            if font_name not in target_fonts:
+                fonts_to_add.append(font_block)
+
+        if not fonts_to_add:
+            log.append("All architect fonts already present in target fontTable")
+            return
+
+        # Insert before </w:fonts>
+        if "</w:fonts>" in target_font_xml:
+            insertion = "\n".join(fonts_to_add)
+            target_font_xml = target_font_xml.replace(
+                "</w:fonts>",
+                f"{insertion}\n</w:fonts>"
+            )
+            font_path.write_text(target_font_xml, encoding="utf-8")
+            log.append(f"Added {len(fonts_to_add)} font declarations from architect")
+
+    # Post-mutation validation
+    final_xml = font_path.read_text(encoding="utf-8")
+    post_err = _check_xml_fragment(final_xml, "w:fonts")
+    if post_err:
+        log.append(f"WARNING: fontTable.xml may be malformed after mutation — {post_err}")
 
 
 # ─────────────────────────────────────────────────────────────────────────────
