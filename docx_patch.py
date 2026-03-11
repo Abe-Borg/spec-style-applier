@@ -3,9 +3,25 @@ from __future__ import annotations
 
 from pathlib import Path
 import zipfile
-from typing import Dict, Union
+import xml.etree.ElementTree as ET
+from typing import Dict, List, Union
 
 BytesOrStr = Union[bytes, str]
+
+
+def validate_xml_wellformedness(replacements: Dict[str, bytes]) -> List[str]:
+    """Parse each replacement part with ElementTree to verify XML well-formedness.
+
+    Returns a list of error strings (empty means all parts are valid).
+    """
+    errors: List[str] = []
+    for name, content in replacements.items():
+        try:
+            ET.fromstring(content)
+        except ET.ParseError as exc:
+            errors.append(f"{name}: XML parse error: {exc}")
+    return errors
+
 
 def patch_docx(
     src_docx: Path,
@@ -62,6 +78,13 @@ def patch_docx(
                 f"Allowed: {sorted(ALLOWED_PATCHES)}"
             )
 
+    # Validate XML well-formedness before writing — refuse to build a broken DOCX
+    xml_errors = validate_xml_wellformedness(rep_bytes)
+    if xml_errors:
+        raise RuntimeError(
+            "XML well-formedness check failed — refusing to build DOCX:\n"
+            + "\n".join(f"  - {e}" for e in xml_errors)
+        )
 
     out_docx.parent.mkdir(parents=True, exist_ok=True)
     if out_docx.exists():
