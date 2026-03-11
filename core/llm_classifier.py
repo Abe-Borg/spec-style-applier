@@ -85,7 +85,7 @@ def _split_bundle_into_chunks(slim_bundle: dict, max_chars: int = _MAX_BUNDLE_CH
 
     # Check if splitting is needed
     full_json = json.dumps(slim_bundle)
-    if len(full_json) <= max_chars:
+    if len(full_json) <= max_chars and len(paragraphs) <= 300:
         return [slim_bundle]
 
     # Calculate chunk size (number of paragraphs per chunk)
@@ -173,14 +173,14 @@ def classify_target_document(
 
         for attempt in range(max_retries + 1):
             try:
-                response = client.messages.create(
+                with client.messages.stream(
                     model=model,
-                    max_tokens=8192,
+                    max_tokens=16384,
+                    temperature=0,
                     system=PHASE2_MASTER_PROMPT.strip(),
                     messages=[{"role": "user", "content": user_message}]
-                )
-
-                response_text = response.content[0].text
+                ) as stream:
+                    response_text = stream.get_final_text()
                 parsed = _parse_classification_response(response_text)
                 validated = _validate_classifications(parsed, available_roles)
                 chunk_results.append(validated)

@@ -132,6 +132,7 @@ python -m pytest tests/ -v
 2. **Fonts change after styling** — Fixed by materializing effective properties during import
 3. **Some paragraphs not styled** — Expected when role is missing from registry (logged in preflight)
 4. **Word "Repair" warning** — Check: style blocks intact, all dependencies imported, no artifacts in DOCX
+5. **LLM output truncated** — If the spec has 300+ paragraphs, the classification JSON may exceed the model's output limit. The classifier automatically chunks large documents. If coverage is still low on a large spec, try reducing the chunk size.
 
 ## Copyright Notice
 

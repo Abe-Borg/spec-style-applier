@@ -46,7 +46,6 @@ class DocxDecomposer:
         """
         self.docx_path = Path(docx_path)
         self.extract_dir = None
-        self.markdown_report = []
 
     def extract(self, output_dir=None):
         """
@@ -133,6 +132,13 @@ def main():
     # Validate input path
     if not os.path.exists(args.docx_path):
         print(f"Error: File not found: {args.docx_path}")
+        sys.exit(1)
+
+    # Validate mutually exclusive flags
+    if getattr(args, 'phase2_build_bundle', False) and getattr(args, 'classify', False):
+        print("Error: --phase2-build-bundle and --classify are mutually exclusive.")
+        print("  --phase2-build-bundle: build slim bundle for manual LLM step")
+        print("  --classify: run full automated pipeline")
         sys.exit(1)
 
     input_docx_path = Path(args.docx_path)
