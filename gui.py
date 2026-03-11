@@ -272,10 +272,18 @@ class Phase2GUI:
 
         # Apply environment
         arch_template_registry_path = arch_root / "arch_template_registry.json"
-        if arch_template_registry_path.exists():
-            env_registry = json.loads(arch_template_registry_path.read_text(encoding="utf-8"))
-            apply_environment_to_target(target_extract_dir=extract_dir, registry=env_registry, log=log)
-            self._log("  Applied environment")
+        if not arch_template_registry_path.exists():
+            raise FileNotFoundError(
+                f"arch_template_registry.json not found at {arch_template_registry_path}. "
+                "Phase 2 cannot proceed without the template registry."
+            )
+        env_registry = json.loads(arch_template_registry_path.read_text(encoding="utf-8"))
+        apply_environment_to_target(target_extract_dir=extract_dir, registry=env_registry, log=log)
+        self._log("  Applied environment")
+
+        # Build synthetic styles.xml from registry (no disk dependency on arch extracted folder)
+        from core.registry import build_arch_styles_xml_from_registry
+        arch_styles_xml = build_arch_styles_xml_from_registry(env_registry)
 
         # Import styles
         used_roles = {
@@ -287,12 +295,12 @@ class Phase2GUI:
 
         # Import numbering
         style_numid_remap = {}
-        if has_numbering and arch_template_registry_path.exists():
+        if has_numbering:
             try:
                 style_numid_remap = import_numbering(
-                    arch_extract_dir=arch_root,
                     target_extract_dir=extract_dir,
                     arch_template_registry=env_registry,
+                    arch_styles_xml=arch_styles_xml,
                     style_ids_to_import=needed_style_ids,
                     log=log
                 )
@@ -301,7 +309,7 @@ class Phase2GUI:
 
         import_arch_styles_into_target(
             target_extract_dir=extract_dir,
-            arch_extract_dir=arch_root,
+            arch_styles_xml=arch_styles_xml,
             needed_style_ids=needed_style_ids,
             log=log,
             style_numid_remap=style_numid_remap

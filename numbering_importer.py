@@ -298,33 +298,29 @@ def remap_numid_in_style_xml(style_xml: str, old_num_id: int, new_num_id: int) -
 
 
 def import_numbering(
-    arch_extract_dir: Path,
     target_extract_dir: Path,
     arch_template_registry: Dict[str, Any],
+    arch_styles_xml: str,
     style_ids_to_import: List[str],
     log: List[str]
 ) -> Dict[str, Dict[str, int]]:
     """
     Main entry point: import architect's numbering into target.
-    
+
+    arch_styles_xml: synthetic or real styles.xml content as a string
+    (built from arch_template_registry.json via build_arch_styles_xml_from_registry).
+
     Returns style_numid_remap for use when importing styles.
     """
     # Check if registry has numbering data
     if "numbering" not in arch_template_registry:
         log.append("No numbering data in arch_template_registry, skipping numbering import")
         return {}
-    
+
     numbering_data = arch_template_registry.get("numbering", {})
     if not numbering_data.get("abstract_nums") and not numbering_data.get("nums"):
         log.append("No numbering definitions in arch_template_registry")
         return {}
-    
-    # Read architect's styles.xml to find numId references
-    arch_styles_path = arch_extract_dir / "word" / "styles.xml"
-    if not arch_styles_path.exists():
-        log.append(f"WARNING: Architect styles.xml not found at {arch_styles_path}")
-        return {}
-    arch_styles_xml = arch_styles_path.read_text(encoding="utf-8")
     
     # Read target's numbering.xml
     target_numbering_path = target_extract_dir / "word" / "numbering.xml"

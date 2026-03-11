@@ -82,10 +82,11 @@ pip install -r requirements-build.txt
 ## Inputs
 
 1. **Target MEP DOCX** — A mechanical or plumbing specification document
-2. **Architect Template Folder** — Extracted folder from Phase 1, containing:
+2. **Architect Registry Folder** — Folder containing the two JSON files from Phase 1:
    - `arch_style_registry.json` — CSI role → style ID mapping
-   - `arch_template_registry.json` — Complete formatting environment
-   - `word/styles.xml`, `word/numbering.xml`, etc.
+   - `arch_template_registry.json` — Complete formatting environment (styles, numbering, theme, fonts, settings, docDefaults)
+
+   Only these two files are needed. Phase 2 does not require the architect's extracted `word/` folder.
 3. **API Key** (for automated classification) — Anthropic API key
 
 ## What Phase 2 Does
