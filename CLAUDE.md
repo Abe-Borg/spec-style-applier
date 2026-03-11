@@ -158,7 +158,7 @@ OUTPUT: <target>_PHASE2_FORMATTED.docx
 | `core/style_import.py` | Style extraction, basedOn chain walking, property materialization, style import |
 | `core/classification.py` | LLM prompts, boilerplate filtering, slim bundle building, classification application |
 | `core/registry.py` | Architect registry loading, preflight reporting, path resolution |
-| `core/llm_classifier.py` | Anthropic API integration, retry logic, chunking, coverage metrics |
+| `core/llm_classifier.py` | Anthropic API integration (streaming), retry logic, chunking, coverage metrics |
 | `arch_env_applier.py` | Imports formatting environment (theme, settings, fonts, docDefaults) |
 | `numbering_importer.py` | Imports numbering definitions (abstractNum + num) with ID collision avoidance |
 | `docx_patch.py` | Creates output DOCX via surgical ZIP entry replacement |
@@ -276,3 +276,4 @@ Headers (`word/header*`) and footers (`word/footer*`) are **explicitly forbidden
 2. **Fonts change after styling** — imported style lacked explicit `<w:rPr>` due to inheritance. Fix: materialize effective properties when importing.
 3. **Some paragraphs not styled** — role missing from registry or intentionally skipped (`SKIP`, `END_OF_SECTION`). Expected behavior, logged in preflight.
 4. **Word opens with "Repair" warning** — invalid XML or broken basedOn chain. Check: style blocks are intact, all dependencies imported, no workspace artifacts in DOCX.
+5. **LLM output truncated** — If the spec has 300+ paragraphs, the classification JSON may exceed the model's output limit. The classifier automatically chunks large documents. If coverage is still low on a large spec, try reducing the chunk size.

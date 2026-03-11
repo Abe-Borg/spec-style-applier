@@ -242,7 +242,7 @@ class Phase2GUI:
         # Extract
         self._log("  Extracting DOCX...")
         decomposer = DocxDecomposer(str(docx_path))
-        extract_dir = decomposer.extract()
+        extract_dir = decomposer.extract(output_dir=Path("output") / f"{docx_path.stem}_extracted")
 
         # Load registry
         arch_registry = load_arch_style_registry(arch_path)
@@ -320,7 +320,7 @@ class Phase2GUI:
         self._log("  Applied classifications, stability verified")
 
         # Patch output
-        output_docx_path = docx_path.with_name(docx_path.stem + "_PHASE2_FORMATTED.docx")
+        output_docx_path = Path("output") / (docx_path.stem + "_PHASE2_FORMATTED.docx")
         replacements = {
             "word/document.xml": (extract_dir / "word" / "document.xml").read_bytes(),
             "word/styles.xml": (extract_dir / "word" / "styles.xml").read_bytes(),

@@ -96,10 +96,24 @@ def verify_phase2_invariants(
     # we check that no NON-FONT formatting was changed.
     # This is a relaxed check - we're mainly guarding against accidental changes.
     
-    # For now, skip this check since stripping fonts can remove entire rPr blocks
-    # and change the count. The main contract check in apply_phase2_classifications
-    # handles this more precisely.
-    #
-    # If you want stricter checking, uncomment:
-    # if before_rpr_filtered != after_rpr_filtered:
-    #     raise RuntimeError("INVARIANT FAIL: document.xml run properties changed beyond font elements")
+    # Verify that no non-font formatting was lost.
+    # We can't do a strict count comparison because stripping fonts can remove
+    # entire rPr blocks (when rFonts/sz/szCs were the only children).
+    # Instead, check that every non-empty normalized "before" block still appears
+    # somewhere in the "after" set. This catches accidental bold/italic/color changes.
+    before_set = {}
+    for b in before_rpr_filtered:
+        before_set[b] = before_set.get(b, 0) + 1
+
+    after_set = {}
+    for a in after_rpr_filtered:
+        after_set[a] = after_set.get(a, 0) + 1
+
+    for block, count in before_set.items():
+        after_count = after_set.get(block, 0)
+        if after_count < count:
+            raise RuntimeError(
+                f"INVARIANT FAIL: non-font run formatting was lost. "
+                f"A normalized rPr block appeared {count}x before but {after_count}x after.\n"
+                f"Block: {block[:200]}"
+            )

@@ -363,32 +363,3 @@ def import_numbering(
     log.append(f"Updated {target_numbering_path}")
     
     return plan["style_numid_remap"]
-
-
-# =============================================================================
-# UPDATED STYLE IMPORT FUNCTION
-# =============================================================================
-# This replaces the style import logic to KEEP numPr and remap numIds
-
-def import_arch_style_with_numbering(
-    style_xml: str,
-    style_numid_remap: Dict[str, Dict[str, int]],
-    style_id: str,
-    log: List[str]
-) -> str:
-    """
-    Import a style, keeping numPr but remapping numId to the imported numbering.
-    
-    OLD behavior: Strip numPr entirely
-    NEW behavior: Keep numPr, update numId reference
-    """
-    if style_id in style_numid_remap:
-        remap = style_numid_remap[style_id]
-        old_num_id = remap["old_numId"]
-        new_num_id = remap["new_numId"]
-        
-        # Remap the numId
-        style_xml = remap_numid_in_style_xml(style_xml, old_num_id, new_num_id)
-        log.append(f"  Remapped numId {old_num_id} -> {new_num_id} in style {style_id}")
-    
-    return style_xml
