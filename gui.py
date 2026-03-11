@@ -278,6 +278,16 @@ class Phase2GUI:
                 "Phase 2 cannot proceed without the template registry."
             )
         env_registry = json.loads(arch_template_registry_path.read_text(encoding="utf-8"))
+
+        # Preflight contract validation — abort before any mutation
+        from core.registry import preflight_validate_registries
+        preflight_errors = preflight_validate_registries(arch_registry, env_registry)
+        if preflight_errors:
+            error_report = "\n".join(f"  - {e}" for e in preflight_errors)
+            raise ValueError(
+                f"Preflight validation failed ({len(preflight_errors)} error(s)):\n{error_report}"
+            )
+
         apply_environment_to_target(target_extract_dir=extract_dir, registry=env_registry, log=log)
         self._log("  Applied environment")
 
