@@ -67,7 +67,7 @@ python docx_decomposer.py target.docx \
 pip install -r requirements.txt
 ```
 
-Runtime dependency: `anthropic>=0.40.0` (for automated classification).
+Runtime dependency: `anthropic==0.84.0` (for automated classification, pinned with all transitive dependencies).
 
 For development:
 ```bash

@@ -14,9 +14,9 @@ Phase 1 (external, not in this repo) extracts and catalogs styles from an archit
 spec-style-applier/
 ├── docx_decomposer.py        # CLI entry point + DocxDecomposer class (~400 lines)
 ├── arch_env_applier.py        # Formatting environment application (657 lines)
-├── numbering_importer.py      # Numbering definition import with collision avoidance (393 lines)
-├── docx_patch.py              # Surgical ZIP patching for output DOCX (93 lines)
-├── phase2_invariants.py       # Post-processing invariant verification (105 lines)
+├── numbering_importer.py      # Numbering definition import with collision avoidance (360 lines)
+├── docx_patch.py              # Surgical ZIP patching for output DOCX (92 lines)
+├── phase2_invariants.py       # Post-processing invariant verification (118 lines)
 ├── gui.py                     # Tkinter GUI with batch mode (~430 lines)
 ├── core/                      # Core logic package
 │   ├── __init__.py            # Re-exports public interface
@@ -29,27 +29,20 @@ spec-style-applier/
 ├── tests/                     # Unit tests (pytest)
 │   ├── test_xml_helpers.py    # Tests for XML manipulation functions
 │   └── test_style_import.py   # Tests for style import and materialization
-├── requirements.txt           # Runtime: anthropic>=0.40.0
+├── requirements.txt           # Full pinned dependencies (anthropic==0.84.0 + transitive deps)
 ├── requirements-build.txt     # PyInstaller packaging dependencies
 ├── requirements-dev.txt       # Development: pytest>=7.0
 ├── README.md                  # Technical documentation
 ├── CLAUDE.md                  # This file
 ├── .gitignore                 # Standard Python + project-specific ignores
-├── FIRE_SPEC.docx             # Example specification document
-├── MECH_SPEC.docx             # Example specification document
-├── PLUMB_SPEC.docx            # Example specification document
-├── phase2_classifications.json # Example LLM classification output
-└── NVES_extracted/            # Example extracted architect template
-    ├── arch_style_registry.json     # CSI role → style mapping
-    ├── arch_template_registry.json  # Complete environment data
-    └── word/                        # Template XML files
+└── phase2_classifications.json # Example LLM classification output
 ```
 
 ## Technology Stack
 
 - **Python 3.7+** — all source code
 - **Standard library** for core functionality: `zipfile`, `re`, `json`, `pathlib`, `hashlib`, `dataclasses`
-- **anthropic** — sole external runtime dependency (for automated LLM classification)
+- **anthropic==0.84.0** — sole external runtime dependency (for automated LLM classification)
 - **No external XML libraries** — regex-based XML manipulation for byte-level fidelity
 - **pytest** — development dependency for unit tests
 - **tkinter** — GUI (stdlib, no extra install)
