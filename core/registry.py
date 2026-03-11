@@ -7,8 +7,15 @@ preflight reports before classification application.
 
 import re
 import json
+import xml.etree.ElementTree as _ET
 from pathlib import Path
 from typing import Dict, Any, List, Optional, Set
+from xml.sax.saxutils import escape as _sax_escape
+
+
+def _xml_escape_attr(value: str) -> str:
+    """Escape a string for safe use inside an XML attribute value (double-quoted)."""
+    return _sax_escape(str(value), {'"': "&quot;"})
 
 
 def build_arch_styles_xml_from_registry(registry: Dict[str, Any]) -> str:
@@ -56,23 +63,26 @@ def build_arch_styles_xml_from_registry(registry: Dict[str, Any]) -> str:
             continue
 
         stype = sd.get("type", "paragraph")
-        name = sd.get("name", sid)
+        name = sd.get("name") or sid
         based_on = sd.get("based_on")
         next_style = sd.get("next")
         link = sd.get("link")
 
-        style_attrs = f'w:type="{stype}" w:styleId="{sid}"'
+        # XML-escape all attribute values (NOT raw XML property fragments)
+        e_sid = _xml_escape_attr(sid)
+        e_stype = _xml_escape_attr(stype)
+        e_name = _xml_escape_attr(name)
 
-        parts.append(f'<w:style {style_attrs}>')
-        parts.append(f'<w:name w:val="{name}"/>')
+        parts.append(f'<w:style w:type="{e_stype}" w:styleId="{e_sid}">')
+        parts.append(f'<w:name w:val="{e_name}"/>')
         if based_on:
-            parts.append(f'<w:basedOn w:val="{based_on}"/>')
+            parts.append(f'<w:basedOn w:val="{_xml_escape_attr(based_on)}"/>')
         if next_style:
-            parts.append(f'<w:next w:val="{next_style}"/>')
+            parts.append(f'<w:next w:val="{_xml_escape_attr(next_style)}"/>')
         if link:
-            parts.append(f'<w:link w:val="{link}"/>')
+            parts.append(f'<w:link w:val="{_xml_escape_attr(link)}"/>')
         if sd.get("ui_priority") is not None:
-            parts.append(f'<w:uiPriority w:val="{sd["ui_priority"]}"/>')
+            parts.append(f'<w:uiPriority w:val="{_xml_escape_attr(sd["ui_priority"])}"/>')
         if sd.get("semi_hidden"):
             parts.append("<w:semiHidden/>")
         if sd.get("unhide_when_used"):
@@ -80,6 +90,7 @@ def build_arch_styles_xml_from_registry(registry: Dict[str, Any]) -> str:
         if sd.get("qformat"):
             parts.append("<w:qFormat/>")
 
+        # Raw XML fragments — inserted verbatim, never escaped
         if sd.get("pPr"):
             parts.append(sd["pPr"])
         if sd.get("rPr"):
@@ -94,7 +105,17 @@ def build_arch_styles_xml_from_registry(registry: Dict[str, Any]) -> str:
         parts.append("</w:style>")
 
     parts.append("</w:styles>")
-    return "\n".join(parts)
+    result = "\n".join(parts)
+
+    # Validate that the generated XML is well-formed
+    try:
+        _ET.fromstring(result.encode("utf-8"))
+    except _ET.ParseError as exc:
+        raise ValueError(
+            f"Synthetic styles.xml failed XML well-formedness check: {exc}"
+        ) from exc
+
+    return result
 
 
 def resolve_arch_extract_root(p: Path) -> Path:
