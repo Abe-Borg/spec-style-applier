@@ -325,7 +325,7 @@ def extract_style_block_raw(styles_xml_text: str, style_id: str) -> Optional[str
 
 def import_arch_styles_into_target(
     target_extract_dir: Path,
-    arch_extract_dir: Path,
+    arch_styles_xml: str,
     needed_style_ids: List[str],
     log: List[str],
     style_numid_remap: Optional[Dict[str, Dict[str, int]]] = None
@@ -333,15 +333,13 @@ def import_arch_styles_into_target(
     """
     Copy specific style blocks from architect styles.xml into target styles.xml (idempotent),
     including basedOn dependencies.
+
+    arch_styles_xml: synthetic or real styles.xml content as a string
+    (built from arch_template_registry.json via build_arch_styles_xml_from_registry).
     """
-    from core.registry import resolve_arch_extract_root
-
-    arch_extract_dir = resolve_arch_extract_root(arch_extract_dir)
-
-    arch_styles_path = arch_extract_dir / "word" / "styles.xml"
     tgt_styles_path = target_extract_dir / "word" / "styles.xml"
 
-    arch_styles_text = arch_styles_path.read_text(encoding="utf-8")
+    arch_styles_text = arch_styles_xml
     tgt_styles_text = tgt_styles_path.read_text(encoding="utf-8")
 
     existing = set(re.findall(r'w:styleId="([^"]+)"', tgt_styles_text))

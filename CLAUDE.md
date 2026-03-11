@@ -220,6 +220,8 @@ The LLM classifies paragraphs into these semantic roles:
 - **`arch_template_registry.json`** — Complete formatting environment: theme, styles, numbering, docDefaults, fonts, settings.
 - **`phase2_classifications.json`** — LLM output: `{ "classifications": [{ "paragraph_index": N, "csi_role": "ROLE" }] }`
 
+Phase 2 operates entirely from these two JSON files. No access to the architect's extracted `word/` folder is needed. The style definitions in `arch_template_registry.json` are reconstructed into a synthetic `styles.xml` at runtime via `build_arch_styles_xml_from_registry()` for regex-based processing.
+
 ### Outputs
 - **`<target>_PHASE2_FORMATTED.docx`** — The restyled document
 
@@ -255,6 +257,7 @@ Mix of try/except and explicit validation. Errors are logged into `log: List[str
 - **Do not modify `numbering.xml` during style application** — numbering preservation happens at the paragraph level via `<w:numPr>` materialization
 - **Do not add heavy external dependencies** — core uses stdlib + anthropic only
 - **Do not merge Phase 1 logic into this codebase** — Phase 1 and Phase 2 are separate concerns
+- **Do not read the architect's extracted `word/` folder directly** — all architect data must come through the two JSON contract files via `build_arch_styles_xml_from_registry()`
 
 ## Allowed Patch Targets (docx_patch.py)
 
