@@ -56,3 +56,36 @@ class TestNormalizeParagraphForContract:
         assert "w:rFonts" not in result
         assert "w:sz" not in result
         assert "<w:rPr" not in result  # empty rPr cleaned up too
+
+    def test_mixed_ppr_preserves_remaining(self):
+        """pPr with pStyle + numPr + jc — only jc survives, pPr kept."""
+        p = (
+            '<w:p><w:pPr>'
+            '<w:pStyle w:val="Normal"/>'
+            '<w:numPr><w:ilvl w:val="0"/><w:numId w:val="1"/></w:numPr>'
+            '<w:jc w:val="center"/>'
+            '</w:pPr><w:r><w:t>Hi</w:t></w:r></w:p>'
+        )
+        result = _normalize_paragraph_for_contract(p)
+        assert "w:pStyle" not in result
+        assert "w:numPr" not in result
+        assert 'w:jc w:val="center"' in result
+        assert "<w:pPr>" in result  # pPr retained because jc remains
+
+    def test_both_empty_ppr_and_rpr_cleaned(self):
+        """pPr with only pStyle + rPr with only fonts — both shells removed."""
+        p = (
+            '<w:p><w:pPr><w:pStyle w:val="Heading1"/></w:pPr>'
+            '<w:r><w:rPr><w:rFonts w:ascii="Arial"/><w:sz w:val="24"/><w:szCs w:val="24"/></w:rPr>'
+            '<w:t>X</w:t></w:r></w:p>'
+        )
+        result = _normalize_paragraph_for_contract(p)
+        assert "<w:pPr" not in result
+        assert "<w:rPr" not in result
+        assert "<w:t>X</w:t>" in result
+
+    def test_self_closing_rpr_cleaned(self):
+        """Self-closing <w:rPr/> should be removed."""
+        p = '<w:p><w:r><w:rPr/><w:t>Hi</w:t></w:r></w:p>'
+        result = _normalize_paragraph_for_contract(p)
+        assert "<w:rPr" not in result

@@ -223,3 +223,95 @@ class TestCollectStyleDeps:
         # DoesNotExist is visited (added to seen) but has no block — no crash
         assert "Orphan" in seen
         assert "DoesNotExist" in seen
+
+    def test_only_based_on(self):
+        """Style with only basedOn — only basedOn target collected."""
+        styles = '''
+<w:styles>
+  <w:style w:type="paragraph" w:styleId="Child">
+    <w:name w:val="Child"/>
+    <w:basedOn w:val="Parent"/>
+  </w:style>
+  <w:style w:type="paragraph" w:styleId="Parent">
+    <w:name w:val="Parent"/>
+  </w:style>
+</w:styles>
+'''
+        seen = set()
+        _collect_style_deps_from_arch(styles, "Child", seen)
+        assert seen == {"Child", "Parent"}
+
+    def test_only_next(self):
+        """Style with only next — only next target collected."""
+        styles = '''
+<w:styles>
+  <w:style w:type="paragraph" w:styleId="StyleA">
+    <w:name w:val="StyleA"/>
+    <w:next w:val="StyleB"/>
+  </w:style>
+  <w:style w:type="paragraph" w:styleId="StyleB">
+    <w:name w:val="StyleB"/>
+  </w:style>
+</w:styles>
+'''
+        seen = set()
+        _collect_style_deps_from_arch(styles, "StyleA", seen)
+        assert seen == {"StyleA", "StyleB"}
+
+    def test_deep_based_on_chain(self):
+        """A -> B -> C -> D: all 4 collected via transitive basedOn."""
+        styles = '''
+<w:styles>
+  <w:style w:type="paragraph" w:styleId="A">
+    <w:name w:val="A"/>
+    <w:basedOn w:val="B"/>
+  </w:style>
+  <w:style w:type="paragraph" w:styleId="B">
+    <w:name w:val="B"/>
+    <w:basedOn w:val="C"/>
+  </w:style>
+  <w:style w:type="paragraph" w:styleId="C">
+    <w:name w:val="C"/>
+    <w:basedOn w:val="D"/>
+  </w:style>
+  <w:style w:type="paragraph" w:styleId="D">
+    <w:name w:val="D"/>
+  </w:style>
+</w:styles>
+'''
+        seen = set()
+        _collect_style_deps_from_arch(styles, "A", seen)
+        assert seen == {"A", "B", "C", "D"}
+
+    def test_nonexistent_start_style(self):
+        """Starting from a nonexistent style — seen contains only that ID."""
+        styles = '<w:styles></w:styles>'
+        seen = set()
+        _collect_style_deps_from_arch(styles, "Ghost", seen)
+        assert seen == {"Ghost"}
+
+
+# ── Additional materialize_arch_style_block tests ──────────────────────────
+
+class TestMaterializeArchStyleBlockExtended:
+    def test_derived_style_gets_parent_rfonts(self):
+        """CSI-Article (basedOn CSI-Part) should get Arial from parent chain."""
+        style = _extract_style_block(STYLES_FOR_MATERIALIZE, "CSI-Article")
+        assert style is not None
+        result = materialize_arch_style_block(style, "CSI-Article", STYLES_FOR_MATERIALIZE)
+        # Should have rPr with fonts from CSI-Part (Arial)
+        assert '<w:rPr>' in result
+        assert 'w:ascii="Arial"' in result
+        # Should also get sz/szCs from docDefaults
+        assert '<w:sz' in result
+        assert '<w:szCs' in result
+
+    def test_paragraph_no_ppr_gets_effective_ppr(self):
+        """Paragraph style with no pPr gets effective pPr from chain."""
+        # CSI-Article has no pPr and basedOn CSI-Part which also has no pPr,
+        # so it should get pPr from docDefaults (spacing after="160")
+        style = _extract_style_block(STYLES_FOR_MATERIALIZE, "CSI-Article")
+        assert style is not None
+        result = materialize_arch_style_block(style, "CSI-Article", STYLES_FOR_MATERIALIZE)
+        assert '<w:pPr>' in result
+        assert '<w:spacing' in result

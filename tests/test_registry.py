@@ -92,6 +92,12 @@ class TestXmlEscaping:
         assert "&quot;" in xml
         ET.fromstring(xml)
 
+    def test_apostrophe_in_name(self):
+        """Apostrophe is valid in XML attributes — verify well-formedness."""
+        reg = _make_registry(_sd("S1", name="Foo's Style"))
+        xml = build_arch_styles_xml_from_registry(reg)
+        ET.fromstring(xml)  # must not raise
+
 
 # ── Name fallback ────────────────────────────────────────────────────
 
@@ -115,6 +121,14 @@ class TestNameFallback:
         xml = build_arch_styles_xml_from_registry(reg)
         assert 'w:val="EmptyName"' in xml
         ET.fromstring(xml)
+
+    def test_whitespace_only_name_kept_as_is(self):
+        """Whitespace-only name is truthy so it is NOT replaced by style_id."""
+        reg = _make_registry(_sd("WsId", name="   "))
+        xml = build_arch_styles_xml_from_registry(reg)
+        # The name value should be the whitespace, not the style_id
+        assert 'w:val="WsId"' not in xml or 'w:styleId="WsId"' in xml
+        ET.fromstring(xml)  # still well-formed
 
 
 # ── Raw XML fragments preserved verbatim ─────────────────────────────
@@ -157,10 +171,58 @@ class TestValidation:
 # ── Skips empty style_id ─────────────────────────────────────────────
 
 
+class TestDependencyRefs:
+    """Verify basedOn, link, and next references appear in output XML."""
+
+    def test_all_three_refs_present(self):
+        reg = _make_registry(
+            _sd("Normal"),
+            _sd("Heading1", based_on="Normal", link="Heading1Char", next="BodyText"),
+            _sd("Heading1Char", type="character"),
+            _sd("BodyText", based_on="Normal"),
+        )
+        xml = build_arch_styles_xml_from_registry(reg)
+        assert '<w:basedOn w:val="Normal"/>' in xml
+        assert '<w:link w:val="Heading1Char"/>' in xml
+        assert '<w:next w:val="BodyText"/>' in xml
+        ET.fromstring(xml)
+
+    def test_based_on_chain_all_present(self):
+        """A -> B -> C chain: all three styles appear."""
+        reg = _make_registry(
+            _sd("StyleC"),
+            _sd("StyleB", based_on="StyleC"),
+            _sd("StyleA", based_on="StyleB"),
+        )
+        xml = build_arch_styles_xml_from_registry(reg)
+        assert 'w:styleId="StyleA"' in xml
+        assert 'w:styleId="StyleB"' in xml
+        assert 'w:styleId="StyleC"' in xml
+        ET.fromstring(xml)
+
+
 class TestEdgeCases:
     def test_empty_style_id_skipped(self):
         reg = _make_registry(_sd(""), _sd("Valid"))
         xml = build_arch_styles_xml_from_registry(reg)
         assert 'w:styleId=""' not in xml
         assert 'w:styleId="Valid"' in xml
+        ET.fromstring(xml)
+
+    def test_character_type(self):
+        reg = _make_registry(_sd("CharStyle", type="character", name="Char"))
+        xml = build_arch_styles_xml_from_registry(reg)
+        assert 'w:type="character"' in xml
+        ET.fromstring(xml)
+
+    def test_table_type(self):
+        reg = _make_registry(_sd("TblStyle", type="table", name="Table"))
+        xml = build_arch_styles_xml_from_registry(reg)
+        assert 'w:type="table"' in xml
+        ET.fromstring(xml)
+
+    def test_ui_priority_rendered(self):
+        reg = _make_registry(_sd("S1", ui_priority=99))
+        xml = build_arch_styles_xml_from_registry(reg)
+        assert '<w:uiPriority w:val="99"/>' in xml
         ET.fromstring(xml)

@@ -126,6 +126,27 @@ class TestNoFontInjection:
         assert rpr in result
         assert "Arial" not in result
 
+    def test_inject_numbering_no_rpr_no_font_added(self):
+        """abstractNum with NO rPr at all — no rPr or font should be added."""
+        abstract_xml = (
+            '<w:abstractNum w:abstractNumId="10">'
+            '<w:nsid w:val="AABB0011"/>'
+            '<w:lvl w:ilvl="0"><w:start w:val="1"/>'
+            '<w:numFmt w:val="decimal"/></w:lvl>'
+            '</w:abstractNum>'
+        )
+
+        result = inject_numbering_into_xml(
+            MINIMAL_TARGET_NUMBERING,
+            [{"xml": abstract_xml}],
+            [],
+        )
+
+        # Count rPr occurrences — should only be those in original target (if any)
+        assert "Arial" not in result
+        # The injected abstractNum should not have had rPr added
+        assert abstract_xml in result
+
 
 # ---------------------------------------------------------------------------
 # Test: fail-fast on missing numId in registry
@@ -157,6 +178,22 @@ class TestBuildPlanFailFast:
         )
 
         with pytest.raises(ValueError, match="missing required abstractNum"):
+            build_numbering_import_plan(
+                registry,
+                styles_xml,
+                MINIMAL_TARGET_NUMBERING,
+                ["CSILevel1"],
+            )
+
+    def test_raises_on_empty_nums_list(self):
+        """Style references numId but registry nums list is empty."""
+        styles_xml = _make_arch_styles_xml([("CSILevel1", 2)])
+        registry = _make_registry(
+            abstract_nums=[_make_abstract_num(5)],
+            nums=[],  # empty — numId=2 can't be found
+        )
+
+        with pytest.raises(ValueError, match="missing required numId"):
             build_numbering_import_plan(
                 registry,
                 styles_xml,
@@ -250,6 +287,25 @@ class TestImportNumberingFailFast:
                 log=log,
             )
 
+    def test_raises_when_numbering_empty_but_needed(self, tmp_path):
+        """Registry has numbering key but empty lists — fail-fast when styles need it."""
+        word_dir = tmp_path / "word"
+        word_dir.mkdir()
+        (word_dir / "numbering.xml").write_text(MINIMAL_TARGET_NUMBERING, encoding="utf-8")
+
+        styles_xml = _make_arch_styles_xml([("CSILevel1", 2)])
+        registry = _make_registry(abstract_nums=[], nums=[])
+        log = []
+
+        with pytest.raises(ValueError, match="empty numbering definitions"):
+            import_numbering(
+                target_extract_dir=tmp_path,
+                arch_template_registry=registry,
+                arch_styles_xml=styles_xml,
+                style_ids_to_import=["CSILevel1"],
+                log=log,
+            )
+
 
 # ---------------------------------------------------------------------------
 # Test: happy path — full remap with no font injection
@@ -288,3 +344,56 @@ class TestHappyPath:
         assert "Arial" not in result_xml
         # Original font should be preserved
         assert "Calibri" in result_xml
+
+    def test_nsid_regenerated(self, tmp_path):
+        """nsid values must be regenerated to avoid collisions with source doc."""
+        word_dir = tmp_path / "word"
+        word_dir.mkdir()
+        (word_dir / "numbering.xml").write_text(MINIMAL_TARGET_NUMBERING, encoding="utf-8")
+
+        styles_xml = _make_arch_styles_xml([("CSILevel1", 2)])
+        registry = _make_registry(
+            abstract_nums=[_make_abstract_num(5)],
+            nums=[_make_num(2, 5)],
+        )
+
+        import_numbering(
+            target_extract_dir=tmp_path,
+            arch_template_registry=registry,
+            arch_styles_xml=styles_xml,
+            style_ids_to_import=["CSILevel1"],
+            log=[],
+        )
+
+        result_xml = (word_dir / "numbering.xml").read_text(encoding="utf-8")
+        # The original nsid "AABB0011" should have been replaced with a new random value
+        nsid_matches = re.findall(r'<w:nsid\s+w:val="([^"]+)"', result_xml)
+        # There should be at least 2 nsid values (original target + imported)
+        assert len(nsid_matches) >= 2
+        # The imported one should NOT be "AABB0011" (regenerated)
+        imported_nsids = [n for n in nsid_matches if n != "00000001"]  # original target nsid
+        assert all(n != "AABB0011" for n in imported_nsids)
+
+    def test_new_numid_avoids_collision(self, tmp_path):
+        """Remapped numId must be greater than existing target max."""
+        word_dir = tmp_path / "word"
+        word_dir.mkdir()
+        (word_dir / "numbering.xml").write_text(MINIMAL_TARGET_NUMBERING, encoding="utf-8")
+
+        styles_xml = _make_arch_styles_xml([("CSILevel1", 2)])
+        registry = _make_registry(
+            abstract_nums=[_make_abstract_num(5)],
+            nums=[_make_num(2, 5)],
+        )
+
+        remap = import_numbering(
+            target_extract_dir=tmp_path,
+            arch_template_registry=registry,
+            arch_styles_xml=styles_xml,
+            style_ids_to_import=["CSILevel1"],
+            log=[],
+        )
+
+        # Target has numId=1, so the new numId must be > 1
+        new_num_id = remap["CSILevel1"]["new_numId"]
+        assert new_num_id > 1

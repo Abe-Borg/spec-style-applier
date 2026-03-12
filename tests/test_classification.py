@@ -54,3 +54,36 @@ class TestEndOfSectionFiltering:
         cleaned, tags = strip_boilerplate_with_report(text)
         assert cleaned == text
         assert tags == []
+
+
+class TestEndOfSectionEdgeCases:
+    """Additional END OF SECTION edge cases."""
+
+    def test_trailing_period(self):
+        cleaned, tags = strip_boilerplate_with_report("END OF SECTION.")
+        assert cleaned == ""
+        assert "end_of_section" in tags
+
+    def test_with_discipline_suffix(self):
+        cleaned, tags = strip_boilerplate_with_report("END OF SECTION - MECHANICAL")
+        assert cleaned == ""
+        assert "end_of_section" in tags
+
+    def test_not_matched_when_embedded_in_sentence(self):
+        """Regex anchors at start of line — embedded phrase should NOT match."""
+        text = "THE END OF SECTION DESCRIBES THE SCOPE"
+        cleaned, tags = strip_boilerplate_with_report(text)
+        assert cleaned == text
+        assert tags == []
+
+    def test_dashes_before_prevent_match(self):
+        """Leading dashes prevent the '^\\s*END' anchor from matching."""
+        text = "--- END OF SECTION ---"
+        cleaned, tags = strip_boilerplate_with_report(text)
+        assert cleaned == text
+        assert tags == []
+
+    def test_empty_string_no_tags(self):
+        cleaned, tags = strip_boilerplate_with_report("")
+        assert cleaned == ""
+        assert tags == []
