@@ -104,94 +104,113 @@ def build_numbering_import_plan(
             "nums_to_import": [],
             "style_numid_remap": {}
         }
-    
+
     # Get the numbering data from arch_template_registry
     numbering = arch_template_registry.get("numbering", {})
     abstract_nums = {an["abstractNumId"]: an for an in numbering.get("abstract_nums", [])}
     nums = {n["numId"]: n for n in numbering.get("nums", [])}
-    
-    # Find max IDs in target to avoid collisions
-    max_abstract_id, max_num_id = find_max_ids_in_numbering(target_numbering_xml)
-    
-    # Build import lists
-    abstract_num_id_remap = {}  # old_id -> new_id
-    num_id_remap = {}  # old_id -> new_id
-    
-    abstract_nums_to_import = []
-    nums_to_import = []
-    
+
+    # --- Fail-fast: every referenced numId must exist in the registry ---
+    missing_nums = sorted(relevant_numids - set(nums.keys()))
+    if missing_nums:
+        styles_for_missing = [
+            f"{sid} -> numId {nid}"
+            for sid, nid in style_numid_usage.items()
+            if nid in missing_nums
+        ]
+        raise ValueError(
+            f"Architect registry is missing required numId definitions: {missing_nums}. "
+            f"Referenced by styles: {styles_for_missing}"
+        )
+
     # First, determine which abstractNums we need (referenced by the nums we need)
     needed_abstract_ids = set()
     for num_id in relevant_numids:
-        if num_id in nums:
-            needed_abstract_ids.add(nums[num_id]["abstractNumId"])
+        needed_abstract_ids.add(nums[num_id]["abstractNumId"])
+
+    # --- Fail-fast: every referenced abstractNumId must exist in the registry ---
+    missing_abstracts = sorted(needed_abstract_ids - set(abstract_nums.keys()))
+    if missing_abstracts:
+        raise ValueError(
+            f"Architect registry is missing required abstractNum definitions: "
+            f"{missing_abstracts}. Referenced by numIds: "
+            f"{sorted(nid for nid in relevant_numids if nums[nid]['abstractNumId'] in missing_abstracts)}"
+        )
+
+    # Find max IDs in target to avoid collisions
+    max_abstract_id, max_num_id = find_max_ids_in_numbering(target_numbering_xml)
+
+    # Build import lists
+    abstract_num_id_remap = {}  # old_id -> new_id
+    num_id_remap = {}  # old_id -> new_id
+
+    abstract_nums_to_import = []
+    nums_to_import = []
     
-    # Assign new IDs to abstractNums
+    # Assign new IDs to abstractNums (all validated to exist above)
     next_abstract_id = max_abstract_id + 1
     for old_abstract_id in sorted(needed_abstract_ids):
-        if old_abstract_id in abstract_nums:
-            new_abstract_id = next_abstract_id
-            abstract_num_id_remap[old_abstract_id] = new_abstract_id
-            
-            # Get XML and remap the abstractNumId
-            xml = abstract_nums[old_abstract_id]["xml"]
-            xml = re.sub(
-                r'w:abstractNumId="' + str(old_abstract_id) + '"',
-                f'w:abstractNumId="{new_abstract_id}"',
-                xml
-            )
-            # Generate new nsid to avoid conflicts
-            xml = re.sub(
-                r'<w:nsid\s+w:val="[^"]+"/>',
-                f'<w:nsid w:val="{_generate_unique_nsid()}"/>',
-                xml
-            )
-            
-            abstract_nums_to_import.append({
-                "old_id": old_abstract_id,
-                "new_id": new_abstract_id,
-                "xml": xml
-            })
-            next_abstract_id += 1
-    
-    # Assign new IDs to nums
+        new_abstract_id = next_abstract_id
+        abstract_num_id_remap[old_abstract_id] = new_abstract_id
+
+        # Get XML and remap the abstractNumId
+        xml = abstract_nums[old_abstract_id]["xml"]
+        xml = re.sub(
+            r'w:abstractNumId="' + str(old_abstract_id) + '"',
+            f'w:abstractNumId="{new_abstract_id}"',
+            xml
+        )
+        # Generate new nsid to avoid conflicts
+        xml = re.sub(
+            r'<w:nsid\s+w:val="[^"]+"/>',
+            f'<w:nsid w:val="{_generate_unique_nsid()}"/>',
+            xml
+        )
+
+        abstract_nums_to_import.append({
+            "old_id": old_abstract_id,
+            "new_id": new_abstract_id,
+            "xml": xml
+        })
+        next_abstract_id += 1
+
+    # Assign new IDs to nums (all validated to exist above)
     next_num_id = max_num_id + 1
     for old_num_id in sorted(relevant_numids):
-        if old_num_id in nums:
-            new_num_id = next_num_id
-            num_id_remap[old_num_id] = new_num_id
-            
-            num_data = nums[old_num_id]
-            old_abstract_id = num_data["abstractNumId"]
-            new_abstract_id = abstract_num_id_remap.get(old_abstract_id, old_abstract_id)
-            
-            # Get XML and remap IDs
-            xml = num_data["xml"]
-            xml = re.sub(
-                r'w:numId="' + str(old_num_id) + '"',
-                f'w:numId="{new_num_id}"',
-                xml
-            )
-            xml = re.sub(
-                r'<w:abstractNumId\s+w:val="' + str(old_abstract_id) + '"',
-                f'<w:abstractNumId w:val="{new_abstract_id}"',
-                xml
-            )
-            # Generate new durableId
-            xml = re.sub(
-                r'w16cid:durableId="[^"]*"',
-                f'w16cid:durableId="{_generate_unique_durable_id()}"',
-                xml
-            )
-            
-            nums_to_import.append({
-                "old_id": old_num_id,
-                "new_id": new_num_id,
-                "old_abstract_id": old_abstract_id,
-                "new_abstract_id": new_abstract_id,
-                "xml": xml
-            })
-            next_num_id += 1
+        new_num_id = next_num_id
+        num_id_remap[old_num_id] = new_num_id
+
+        num_data = nums[old_num_id]
+        old_abstract_id = num_data["abstractNumId"]
+        new_abstract_id = abstract_num_id_remap.get(old_abstract_id, old_abstract_id)
+
+        # Get XML and remap IDs
+        xml = num_data["xml"]
+        xml = re.sub(
+            r'w:numId="' + str(old_num_id) + '"',
+            f'w:numId="{new_num_id}"',
+            xml
+        )
+        xml = re.sub(
+            r'<w:abstractNumId\s+w:val="' + str(old_abstract_id) + '"',
+            f'<w:abstractNumId w:val="{new_abstract_id}"',
+            xml
+        )
+        # Generate new durableId
+        xml = re.sub(
+            r'w16cid:durableId="[^"]*"',
+            f'w16cid:durableId="{_generate_unique_durable_id()}"',
+            xml
+        )
+
+        nums_to_import.append({
+            "old_id": old_num_id,
+            "new_id": new_num_id,
+            "old_abstract_id": old_abstract_id,
+            "new_abstract_id": new_abstract_id,
+            "xml": xml
+        })
+        next_num_id += 1
     
     # Build style remap
     style_numid_remap = {}
@@ -209,37 +228,6 @@ def build_numbering_import_plan(
     }
 
 
-def inject_font_into_numbering_rpr(xml: str, font_name: str = "Arial", font_size: str = "20") -> str:
-    """
-    Inject font specifications into all <w:rPr> blocks within numbering levels.
-    
-    This ensures list numbers render in the correct font, regardless of
-    what Word's cascade would otherwise inherit.
-    
-    Args:
-        xml: The numbering XML (abstractNum or num block)
-        font_name: Font family name (default "Arial")
-        font_size: Font size in half-points (default "20" = 10pt)
-    
-    Returns:
-        XML with font specs injected into rPr blocks
-    """
-    font_xml = f'<w:rFonts w:ascii="{font_name}" w:hAnsi="{font_name}" w:eastAsia="{font_name}" w:cs="{font_name}"/><w:sz w:val="{font_size}"/><w:szCs w:val="{font_size}"/>'
-    
-    def inject_into_rpr(match):
-        rpr_block = match.group(0)
-        # Check if rFonts already exists
-        if '<w:rFonts' in rpr_block:
-            return rpr_block  # Already has font, don't override
-        # Inject font specs right after <w:rPr>
-        return rpr_block.replace('<w:rPr>', f'<w:rPr>{font_xml}', 1)
-    
-    # Find and process all rPr blocks in lvl elements
-    result = re.sub(r'<w:rPr>[\s\S]*?</w:rPr>', inject_into_rpr, xml)
-    
-    return result
-
-
 def inject_numbering_into_xml(
     target_numbering_xml: str,
     abstract_nums_to_import: List[Dict],
@@ -247,42 +235,31 @@ def inject_numbering_into_xml(
 ) -> str:
     """
     Inject imported abstractNums and nums into target numbering.xml.
-    
+
     abstractNums go before the first <w:num> element.
     nums go at the end, before </w:numbering>.
-    
-    Also injects font specifications into rPr blocks to ensure list numbers
-    render in the correct font.
+
+    Architect numbering XML is preserved exactly as-is (no typography
+    normalization).
     """
     result = target_numbering_xml
-    
-    # Inject fonts into the numbering definitions before adding them
-    abstract_nums_with_fonts = []
-    for an in abstract_nums_to_import:
-        xml_with_fonts = inject_font_into_numbering_rpr(an["xml"])
-        abstract_nums_with_fonts.append(xml_with_fonts)
-    
-    nums_with_fonts = []
-    for n in nums_to_import:
-        xml_with_fonts = inject_font_into_numbering_rpr(n["xml"])
-        nums_with_fonts.append(xml_with_fonts)
-    
+
     # Find insertion point for abstractNums (before first <w:num>)
     first_num_match = re.search(r'<w:num\s', result)
     if first_num_match:
         insert_pos = first_num_match.start()
-        abstract_xml = "\n".join(abstract_nums_with_fonts)
+        abstract_xml = "\n".join(an["xml"] for an in abstract_nums_to_import)
         if abstract_xml:
             result = result[:insert_pos] + abstract_xml + "\n" + result[insert_pos:]
-    
+
     # Find insertion point for nums (before </w:numbering>)
     end_match = re.search(r'</w:numbering>', result)
     if end_match:
         insert_pos = end_match.start()
-        num_xml = "\n".join(nums_with_fonts)
+        num_xml = "\n".join(n["xml"] for n in nums_to_import)
         if num_xml:
             result = result[:insert_pos] + num_xml + "\n" + result[insert_pos:]
-    
+
     return result
 
 
@@ -312,20 +289,45 @@ def import_numbering(
 
     Returns style_numid_remap for use when importing styles.
     """
+    # Determine whether any of the styles being imported actually need numbering
+    style_to_numid = extract_used_num_ids_from_styles(arch_styles_xml)
+    needed_num_ids = {
+        nid for sid, nid in style_to_numid.items() if sid in style_ids_to_import
+    }
+
     # Check if registry has numbering data
     if "numbering" not in arch_template_registry:
+        if needed_num_ids:
+            raise ValueError(
+                f"Architect registry has no numbering data but imported styles require "
+                f"numbering definitions (numIds: {sorted(needed_num_ids)})."
+            )
         log.append("No numbering data in arch_template_registry, skipping numbering import")
         return {}
 
     numbering_data = arch_template_registry.get("numbering", {})
     if not numbering_data.get("abstract_nums") and not numbering_data.get("nums"):
+        if needed_num_ids:
+            raise ValueError(
+                f"Architect registry has empty numbering definitions but imported styles "
+                f"require numbering (numIds: {sorted(needed_num_ids)})."
+            )
         log.append("No numbering definitions in arch_template_registry")
         return {}
-    
+
     # Read target's numbering.xml
     target_numbering_path = target_extract_dir / "word" / "numbering.xml"
     if not target_numbering_path.exists():
-        log.append("WARNING: Target has no numbering.xml - skipping numbering import")
+        if needed_num_ids:
+            styles_needing = [
+                sid for sid in style_ids_to_import if sid in style_to_numid
+            ]
+            raise ValueError(
+                f"Target document has no numbering.xml but imported styles require "
+                f"numbering definitions (numIds: {sorted(needed_num_ids)}, "
+                f"styles: {styles_needing})."
+            )
+        log.append("Target has no numbering.xml and no styles need numbering, skipping")
         return {}
     target_numbering_xml = target_numbering_path.read_text(encoding="utf-8")
     

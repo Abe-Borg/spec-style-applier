@@ -375,9 +375,10 @@ def import_arch_styles_into_target(
                 )
                 log.append(f"Remapped numId {old_num_id} -> {new_num_id} in style: {sid}")
             else:
-                # No remap available, strip numPr to avoid broken references
-                log.append(f"WARNING: Stripped <w:numPr> from imported style: {sid}")
-                blk = re.sub(r"<w:numPr\b[^>]*>[\s\S]*?</w:numPr>", "", blk, flags = re.S)
+                raise ValueError(
+                    f"Style '{sid}' contains <w:numPr> but no numbering remap is "
+                    f"available. Numbering import failed or was skipped."
+                )
 
         # HARDEN: make style self-contained (pPr/rPr) to prevent font drift
         blk = materialize_arch_style_block(blk, sid, arch_styles_text)
