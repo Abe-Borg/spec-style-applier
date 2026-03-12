@@ -7,6 +7,7 @@ from core.style_import import (
     _extract_style_block,
     _extract_basedOn,
     _find_style_numpr_in_chain,
+    _collect_style_deps_from_arch,
 )
 
 
@@ -151,3 +152,74 @@ class TestMaterializeArchStyleBlock:
         assert 'w:ascii="Times"' in result
         assert 'w:val="24"' in result
         assert 'w:val="en-GB"' in result
+
+
+# ── _collect_style_deps_from_arch ──────────────────────────────────────────
+
+STYLES_WITH_LINK_NEXT = '''
+<w:styles>
+  <w:style w:type="paragraph" w:styleId="Heading1">
+    <w:name w:val="Heading 1"/>
+    <w:basedOn w:val="Normal"/>
+    <w:link w:val="Heading1Char"/>
+    <w:next w:val="BodyText"/>
+  </w:style>
+  <w:style w:type="character" w:styleId="Heading1Char">
+    <w:name w:val="Heading 1 Char"/>
+    <w:link w:val="Heading1"/>
+  </w:style>
+  <w:style w:type="paragraph" w:styleId="Normal">
+    <w:name w:val="Normal"/>
+  </w:style>
+  <w:style w:type="paragraph" w:styleId="BodyText">
+    <w:name w:val="Body Text"/>
+    <w:basedOn w:val="Normal"/>
+  </w:style>
+</w:styles>
+'''
+
+
+class TestCollectStyleDeps:
+    def test_follows_basedOn(self):
+        seen = set()
+        _collect_style_deps_from_arch(STYLES_WITH_LINK_NEXT, "Heading1", seen)
+        assert "Normal" in seen
+
+    def test_follows_link(self):
+        seen = set()
+        _collect_style_deps_from_arch(STYLES_WITH_LINK_NEXT, "Heading1", seen)
+        assert "Heading1Char" in seen
+
+    def test_follows_next(self):
+        seen = set()
+        _collect_style_deps_from_arch(STYLES_WITH_LINK_NEXT, "Heading1", seen)
+        assert "BodyText" in seen
+
+    def test_transitive_deps(self):
+        """BodyText basedOn Normal — reached transitively via next."""
+        seen = set()
+        _collect_style_deps_from_arch(STYLES_WITH_LINK_NEXT, "Heading1", seen)
+        assert seen == {"Heading1", "Normal", "Heading1Char", "BodyText"}
+
+    def test_cycle_protection(self):
+        """Heading1 <-> Heading1Char via mutual link — must not loop."""
+        seen = set()
+        _collect_style_deps_from_arch(STYLES_WITH_LINK_NEXT, "Heading1", seen)
+        # Completing without infinite recursion is the test
+        assert "Heading1" in seen
+        assert "Heading1Char" in seen
+
+    def test_missing_target_skipped(self):
+        styles = '''
+<w:styles>
+  <w:style w:type="paragraph" w:styleId="Orphan">
+    <w:name w:val="Orphan"/>
+    <w:next w:val="DoesNotExist"/>
+  </w:style>
+</w:styles>
+'''
+        seen = set()
+        _collect_style_deps_from_arch(styles, "Orphan", seen)
+        # DoesNotExist is visited (added to seen) but has no block — no crash
+        assert "Orphan" in seen
+        assert "DoesNotExist" in seen
