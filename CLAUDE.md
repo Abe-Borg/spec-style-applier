@@ -12,12 +12,12 @@ Phase 1 (external, not in this repo) extracts and catalogs styles from an archit
 
 ```
 spec-style-applier/
-├── docx_decomposer.py        # CLI entry point + DocxDecomposer class (~400 lines)
-├── arch_env_applier.py        # Formatting environment application (657 lines)
-├── numbering_importer.py      # Numbering definition import with collision avoidance (360 lines)
-├── docx_patch.py              # Surgical ZIP patching for output DOCX (92 lines)
+├── docx_decomposer.py        # CLI entry point + DocxDecomposer class (~440 lines)
+├── arch_env_applier.py        # Formatting environment, style materialization, Content-Types/rels provisioning (~800 lines)
+├── numbering_importer.py      # Numbering definition import with collision avoidance (~360 lines)
+├── docx_patch.py              # Surgical ZIP patching with XML well-formedness validation (~115 lines)
 ├── phase2_invariants.py       # Post-processing invariant verification (118 lines)
-├── gui.py                     # Tkinter GUI with batch mode (~430 lines)
+├── gui.py                     # Tkinter GUI with batch mode (~460 lines)
 ├── core/                      # Core logic package
 │   ├── __init__.py            # Re-exports public interface
 │   ├── xml_helpers.py         # Paragraph XML iteration and manipulation
@@ -28,7 +28,14 @@ spec-style-applier/
 │   └── llm_classifier.py      # Anthropic API integration for automated classification
 ├── tests/                     # Unit tests (pytest)
 │   ├── test_xml_helpers.py    # Tests for XML manipulation functions
-│   └── test_style_import.py   # Tests for style import and materialization
+│   ├── test_style_import.py   # Tests for style import and materialization
+│   ├── test_env_applier.py    # Tests for environment application and style materialization
+│   ├── test_registry.py       # Tests for registry loading and preflight validation
+│   ├── test_numbering_importer.py # Tests for numbering import and ID collision avoidance
+│   ├── test_preflight.py      # Tests for preflight reporting
+│   ├── test_classification.py # Tests for classification and boilerplate filtering
+│   ├── test_docx_patch.py     # Tests for DOCX patching and XML validation
+│   └── test_normalize_contract.py # Tests for paragraph normalization contract
 ├── requirements.txt           # Full pinned dependencies (anthropic==0.84.0 + transitive deps)
 ├── requirements-build.txt     # PyInstaller packaging dependencies
 ├── requirements-dev.txt       # Development: pytest>=7.0
@@ -152,9 +159,9 @@ OUTPUT: <target>_PHASE2_FORMATTED.docx
 | `core/classification.py` | LLM prompts, boilerplate filtering, slim bundle building, classification application |
 | `core/registry.py` | Architect registry loading, preflight reporting, path resolution |
 | `core/llm_classifier.py` | Anthropic API integration (streaming), retry logic, chunking, coverage metrics |
-| `arch_env_applier.py` | Imports formatting environment (theme, settings, fonts, docDefaults) |
+| `arch_env_applier.py` | Imports formatting environment (theme, settings, fonts, docDefaults), Content-Types/rels provisioning, effective rPr resolution, style materialization for import |
 | `numbering_importer.py` | Imports numbering definitions (abstractNum + num) with ID collision avoidance |
-| `docx_patch.py` | Creates output DOCX via surgical ZIP entry replacement |
+| `docx_patch.py` | Creates output DOCX via surgical ZIP entry replacement with XML well-formedness validation |
 | `phase2_invariants.py` | Post-processing validation: sectPr, headers/footers, run properties |
 | `gui.py` | Tkinter GUI with single-file and batch processing modes |
 
