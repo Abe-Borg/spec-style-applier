@@ -12,12 +12,12 @@ Phase 1 (external, not in this repo) extracts and catalogs styles from an archit
 
 ```
 spec-style-applier/
-├── docx_decomposer.py        # CLI entry point + DocxDecomposer class (~400 lines)
-├── arch_env_applier.py        # Formatting environment application (657 lines)
-├── numbering_importer.py      # Numbering definition import with collision avoidance (360 lines)
-├── docx_patch.py              # Surgical ZIP patching for output DOCX (92 lines)
+├── docx_decomposer.py        # CLI entry point + DocxDecomposer class (440 lines)
+├── arch_env_applier.py        # Formatting environment application (806 lines)
+├── numbering_importer.py      # Numbering definition import with collision avoidance (362 lines)
+├── docx_patch.py              # Surgical ZIP patching for output DOCX (115 lines)
 ├── phase2_invariants.py       # Post-processing invariant verification (118 lines)
-├── gui.py                     # Tkinter GUI with batch mode (~430 lines)
+├── gui.py                     # Tkinter GUI with batch mode (460 lines)
 ├── core/                      # Core logic package
 │   ├── __init__.py            # Re-exports public interface
 │   ├── xml_helpers.py         # Paragraph XML iteration and manipulation
@@ -27,8 +27,16 @@ spec-style-applier/
 │   ├── registry.py            # Registry loading, resolve, preflight
 │   └── llm_classifier.py      # Anthropic API integration for automated classification
 ├── tests/                     # Unit tests (pytest)
-│   ├── test_xml_helpers.py    # Tests for XML manipulation functions
-│   └── test_style_import.py   # Tests for style import and materialization
+│   ├── __init__.py            # Package marker
+│   ├── test_xml_helpers.py    # Tests for paragraph XML manipulation
+│   ├── test_style_import.py   # Tests for style extraction and materialization
+│   ├── test_env_applier.py    # Tests for settings and font table hardening
+│   ├── test_numbering_importer.py  # Tests for numbering import and validation
+│   ├── test_preflight.py      # Tests for registry preflight validation
+│   ├── test_registry.py       # Tests for registry XML building
+│   ├── test_normalize_contract.py  # Tests for paragraph normalization
+│   ├── test_classification.py # Tests for boilerplate filtering
+│   └── test_docx_patch.py     # Tests for XML well-formedness validation
 ├── requirements.txt           # Full pinned dependencies (anthropic==0.84.0 + transitive deps)
 ├── requirements-build.txt     # PyInstaller packaging dependencies
 ├── requirements-dev.txt       # Development: pytest>=7.0
@@ -41,9 +49,9 @@ spec-style-applier/
 ## Technology Stack
 
 - **Python 3.7+** — all source code
-- **Standard library** for core functionality: `zipfile`, `re`, `json`, `pathlib`, `hashlib`, `dataclasses`
+- **Standard library** for core functionality: `zipfile`, `re`, `json`, `pathlib`, `hashlib`, `dataclasses`, `xml.etree.ElementTree`, `xml.sax.saxutils`
 - **anthropic==0.84.0** — sole external runtime dependency (for automated LLM classification)
-- **No external XML libraries** — regex-based XML manipulation for byte-level fidelity
+- **Regex-based XML manipulation** for byte-level fidelity in Word XML processing; stdlib `xml.etree` used only for XML well-formedness validation (`docx_patch.py`) and attribute escaping (`core/registry.py`)
 - **pytest** — development dependency for unit tests
 - **tkinter** — GUI (stdlib, no extra install)
 
