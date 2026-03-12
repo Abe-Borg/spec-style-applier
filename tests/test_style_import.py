@@ -315,3 +315,177 @@ class TestMaterializeArchStyleBlockExtended:
         result = materialize_arch_style_block(style, "CSI-Article", STYLES_FOR_MATERIALIZE)
         assert '<w:pPr>' in result
         assert '<w:spacing' in result
+
+
+# ── TestBuiltinStyleSkipping ───────────────────────────────────────────────
+
+class TestBuiltinStyleSkipping:
+    """
+    Tests that Word built-in styles (Normal, DefaultParagraphFont, etc.)
+    are silently skipped during import when absent from both architect
+    and target, rather than raising ValueError.
+    """
+
+    ARCH_STYLES_XML_NORMAL_MISSING = (
+        '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+        '<w:styles xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">'
+        '<w:docDefaults>'
+        '<w:rPrDefault><w:rPr><w:sz w:val="24"/></w:rPr></w:rPrDefault>'
+        '<w:pPrDefault><w:pPr/></w:pPrDefault>'
+        '</w:docDefaults>'
+        '<w:style w:type="paragraph" w:styleId="CSI_Part__ARCH">'
+        '<w:name w:val="CSI Part"/>'
+        '<w:basedOn w:val="Normal"/>'
+        '<w:pPr><w:spacing w:before="240"/></w:pPr>'
+        '<w:rPr><w:b/></w:rPr>'
+        '</w:style>'
+        '</w:styles>'
+    )
+
+    TARGET_STYLES_XML_NO_NORMAL = (
+        '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+        '<w:styles xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">'
+        '<w:docDefaults>'
+        '<w:rPrDefault><w:rPr><w:sz w:val="22"/></w:rPr></w:rPrDefault>'
+        '<w:pPrDefault><w:pPr/></w:pPrDefault>'
+        '</w:docDefaults>'
+        '</w:styles>'
+    )
+
+    def test_normal_dependency_skipped_when_missing_from_both(self, tmp_path):
+        """
+        When a CSI style has basedOn="Normal" but neither architect nor target
+        explicitly define "Normal", import should succeed.
+        """
+        from core.style_import import import_arch_styles_into_target
+
+        word_dir = tmp_path / "word"
+        word_dir.mkdir()
+        (word_dir / "styles.xml").write_text(
+            self.TARGET_STYLES_XML_NO_NORMAL, encoding="utf-8"
+        )
+
+        log = []
+        import_arch_styles_into_target(
+            target_extract_dir=tmp_path,
+            arch_styles_xml=self.ARCH_STYLES_XML_NORMAL_MISSING,
+            needed_style_ids=["CSI_Part__ARCH"],
+            log=log,
+        )
+
+        result_xml = (word_dir / "styles.xml").read_text(encoding="utf-8")
+        assert 'w:styleId="CSI_Part__ARCH"' in result_xml
+        assert any("Normal" in msg and "built-in" in msg.lower() for msg in log), \
+            f"Expected log entry about skipping built-in Normal, got: {log}"
+
+    def test_normal_used_from_target_when_explicit(self, tmp_path):
+        """
+        When the target explicitly defines "Normal", the existing check
+        catches it and no built-in skip is needed.
+        """
+        from core.style_import import import_arch_styles_into_target
+
+        target_xml = (
+            '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+            '<w:styles xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">'
+            '<w:docDefaults>'
+            '<w:rPrDefault><w:rPr><w:sz w:val="22"/></w:rPr></w:rPrDefault>'
+            '<w:pPrDefault><w:pPr/></w:pPrDefault>'
+            '</w:docDefaults>'
+            '<w:style w:type="paragraph" w:styleId="Normal">'
+            '<w:name w:val="Normal"/>'
+            '<w:pPr><w:spacing w:after="200"/></w:pPr>'
+            '</w:style>'
+            '</w:styles>'
+        )
+
+        word_dir = tmp_path / "word"
+        word_dir.mkdir()
+        (word_dir / "styles.xml").write_text(target_xml, encoding="utf-8")
+
+        log = []
+        import_arch_styles_into_target(
+            target_extract_dir=tmp_path,
+            arch_styles_xml=self.ARCH_STYLES_XML_NORMAL_MISSING,
+            needed_style_ids=["CSI_Part__ARCH"],
+            log=log,
+        )
+
+        result_xml = (word_dir / "styles.xml").read_text(encoding="utf-8")
+        assert 'w:styleId="CSI_Part__ARCH"' in result_xml
+        assert not any("built-in" in msg.lower() for msg in log), \
+            f"Should not skip Normal when it exists in target, got: {log}"
+
+    def test_nonbuiltin_dependency_still_fails_when_missing(self, tmp_path):
+        """
+        A non-built-in style missing from both architect and target
+        must still raise ValueError.
+        """
+        from core.style_import import import_arch_styles_into_target
+
+        arch_xml = (
+            '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+            '<w:styles xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">'
+            '<w:docDefaults>'
+            '<w:rPrDefault><w:rPr/></w:rPrDefault>'
+            '<w:pPrDefault><w:pPr/></w:pPrDefault>'
+            '</w:docDefaults>'
+            '<w:style w:type="paragraph" w:styleId="CSI_Part__ARCH">'
+            '<w:name w:val="CSI Part"/>'
+            '<w:basedOn w:val="MyCustomBase"/>'
+            '</w:style>'
+            '</w:styles>'
+        )
+
+        word_dir = tmp_path / "word"
+        word_dir.mkdir()
+        (word_dir / "styles.xml").write_text(
+            self.TARGET_STYLES_XML_NO_NORMAL, encoding="utf-8"
+        )
+
+        with pytest.raises(ValueError, match="MyCustomBase"):
+            import_arch_styles_into_target(
+                target_extract_dir=tmp_path,
+                arch_styles_xml=arch_xml,
+                needed_style_ids=["CSI_Part__ARCH"],
+                log=[],
+            )
+
+    def test_default_paragraph_font_also_skipped(self, tmp_path):
+        """
+        DefaultParagraphFont is another common implicit built-in.
+        Verify it is also skipped when referenced via link.
+        """
+        from core.style_import import import_arch_styles_into_target
+
+        arch_xml = (
+            '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+            '<w:styles xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">'
+            '<w:docDefaults>'
+            '<w:rPrDefault><w:rPr/></w:rPrDefault>'
+            '<w:pPrDefault><w:pPr/></w:pPrDefault>'
+            '</w:docDefaults>'
+            '<w:style w:type="paragraph" w:styleId="CSI_Article__ARCH">'
+            '<w:name w:val="CSI Article"/>'
+            '<w:link w:val="DefaultParagraphFont"/>'
+            '<w:pPr><w:spacing w:before="200"/></w:pPr>'
+            '</w:style>'
+            '</w:styles>'
+        )
+
+        word_dir = tmp_path / "word"
+        word_dir.mkdir()
+        (word_dir / "styles.xml").write_text(
+            self.TARGET_STYLES_XML_NO_NORMAL, encoding="utf-8"
+        )
+
+        log = []
+        import_arch_styles_into_target(
+            target_extract_dir=tmp_path,
+            arch_styles_xml=arch_xml,
+            needed_style_ids=["CSI_Article__ARCH"],
+            log=log,
+        )
+
+        result_xml = (word_dir / "styles.xml").read_text(encoding="utf-8")
+        assert 'w:styleId="CSI_Article__ARCH"' in result_xml
