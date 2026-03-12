@@ -266,6 +266,33 @@ def build_phase2_slim_bundle(
     }
 
 
+def _normalize_paragraph_for_contract(p_xml: str) -> str:
+    """
+    Normalize paragraph for contract comparison.
+    Strips elements we're allowed to change: pStyle, numPr, and
+    run-level font formatting (rFonts, sz, szCs).  Also removes
+    empty pPr / rPr shells so paragraphs that originally lacked
+    these blocks compare equal after stripping.
+    """
+    out = p_xml
+    # Strip pStyle (we change this)
+    out = re.sub(r"<w:pStyle\b[^>]*/>", "", out)
+    # Strip numPr (we may materialize this)
+    out = re.sub(r"<w:numPr\b[^>]*>[\s\S]*?</w:numPr>", "", out, flags=re.S)
+    # Strip run-level font formatting (we now strip this too)
+    out = re.sub(r"<w:rFonts\b[^>]*/>", "", out)
+    out = re.sub(r"<w:rFonts\b[^>]*>[\s\S]*?</w:rFonts>", "", out, flags=re.S)
+    out = re.sub(r"<w:sz\b[^>]*/>", "", out)
+    out = re.sub(r"<w:szCs\b[^>]*/>", "", out)
+    # Clean up empty rPr blocks that might result
+    out = re.sub(r"<w:rPr>\s*</w:rPr>", "", out)
+    out = re.sub(r"<w:rPr\s*/>", "", out)
+    # Clean up empty pPr blocks that might result
+    out = re.sub(r"<w:pPr>\s*</w:pPr>", "", out)
+    out = re.sub(r"<w:pPr\s*/>", "", out)
+    return out
+
+
 def apply_phase2_classifications(
     extract_dir: Path,
     classifications: Dict[str, Any],
@@ -292,27 +319,6 @@ def apply_phase2_classifications(
     modified_indices = set()
 
     # Contract check: normalize paragraphs for comparison
-    # We now ALLOW changes to: pStyle, numPr, and run-level font formatting (rFonts, sz, szCs)
-    def _normalize_paragraph_for_contract(p_xml: str) -> str:
-        """
-        Normalize paragraph for contract comparison.
-        Strips elements we're allowed to change.
-        """
-        out = p_xml
-        # Strip pStyle (we change this)
-        out = re.sub(r"<w:pStyle\b[^>]*/>", "", out)
-        # Strip numPr (we may materialize this)
-        out = re.sub(r"<w:numPr\b[^>]*>[\s\S]*?</w:numPr>", "", out, flags=re.S)
-        # Strip run-level font formatting (we now strip this too)
-        out = re.sub(r"<w:rFonts\b[^>]*/>", "", out)
-        out = re.sub(r"<w:rFonts\b[^>]*>[\s\S]*?</w:rFonts>", "", out, flags=re.S)
-        out = re.sub(r"<w:sz\b[^>]*/>", "", out)
-        out = re.sub(r"<w:szCs\b[^>]*/>", "", out)
-        # Clean up empty rPr blocks that might result
-        out = re.sub(r"<w:rPr>\s*</w:rPr>", "", out)
-        out = re.sub(r"<w:rPr\s*/>", "", out)
-        return out
-
     contract_before = [_normalize_paragraph_for_contract(p) for p in para_blocks]
 
     items = classifications.get("classifications", [])
