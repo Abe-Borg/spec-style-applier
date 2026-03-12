@@ -92,6 +92,9 @@ IMPORTANT:
 # -------------------------------
 
 BOILERPLATE_PATTERNS = [
+    # END OF SECTION structural markers
+    (r'(?i)^\s*END\s+OF\s+SECTION\s*.*$', 'end_of_section'),
+
     # Specifier notes - bracketed formats
     (r'\[Note to [Ss]pecifier[:\s][^\]]*\]', 'specifier_note'),
     (r'\[Specifier[:\s][^\]]*\]', 'specifier_note'),
