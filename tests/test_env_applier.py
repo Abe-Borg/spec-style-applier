@@ -99,6 +99,32 @@ class TestApplySettingsRejectsMalformed:
         assert any("WARNING" in m and "Skipping compat" in m for m in log)
         assert settings_path.read_text(encoding="utf-8") == _SETTINGS_XML
 
+    def test_empty_string_compat_skips(self, tmp_path):
+        """Empty string compat_xml is falsy — skipped before validation."""
+        extract = _setup_extract_dir(tmp_path)
+        settings_path = extract / "word" / "settings.xml"
+        settings_path.write_text(_SETTINGS_XML, encoding="utf-8")
+
+        registry = {"settings": {"compat": {"compat_xml": ""}}}
+        log = []
+        apply_settings(extract, registry, log)
+
+        assert any("No compat" in m or "skipping" in m.lower() for m in log)
+        assert settings_path.read_text(encoding="utf-8") == _SETTINGS_XML
+
+    def test_none_compat_skips(self, tmp_path):
+        """None compat_xml is falsy — skipped before validation."""
+        extract = _setup_extract_dir(tmp_path)
+        settings_path = extract / "word" / "settings.xml"
+        settings_path.write_text(_SETTINGS_XML, encoding="utf-8")
+
+        registry = {"settings": {"compat": {"compat_xml": None}}}
+        log = []
+        apply_settings(extract, registry, log)
+
+        assert any("No compat" in m or "skipping" in m.lower() for m in log)
+        assert settings_path.read_text(encoding="utf-8") == _SETTINGS_XML
+
 
 class TestApplySettingsCreatesWhenMissing:
     """When target has no settings.xml, create one and wire plumbing."""
@@ -257,6 +283,34 @@ class TestApplyFontTableCreatesWithPlumbing:
         assert 'Target="fontTable.xml"' in rels
         assert "relationships/fontTable" in rels
 
+    def test_content_type_mime(self, tmp_path):
+        """Content type must use the correct OOXML MIME type."""
+        extract = _setup_extract_dir(tmp_path)
+        arch_font_xml = (
+            '<w:fonts xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">'
+            '  <w:font w:name="Arial"><w:panose1 w:val="020B0604020202020204"/></w:font>'
+            '</w:fonts>'
+        )
+        registry = {"fonts": {"font_table_xml": arch_font_xml}}
+        apply_font_table(extract, registry, [])
+
+        ct = (extract / "[Content_Types].xml").read_text(encoding="utf-8")
+        assert "application/vnd.openxmlformats-officedocument.wordprocessingml.fontTable+xml" in ct
+
+    def test_rels_relationship_type_uri(self, tmp_path):
+        """Rels must use the correct OOXML relationship type URI."""
+        extract = _setup_extract_dir(tmp_path)
+        arch_font_xml = (
+            '<w:fonts xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">'
+            '  <w:font w:name="Arial"><w:panose1 w:val="020B0604020202020204"/></w:font>'
+            '</w:fonts>'
+        )
+        registry = {"fonts": {"font_table_xml": arch_font_xml}}
+        apply_font_table(extract, registry, [])
+
+        rels = (extract / "word" / "_rels" / "document.xml.rels").read_text(encoding="utf-8")
+        assert "http://schemas.openxmlformats.org/officeDocument/2006/relationships/fontTable" in rels
+
 
 class TestApplyFontTableMerge:
     """When fontTable exists, only missing fonts are added."""
@@ -281,6 +335,36 @@ class TestApplyFontTableMerge:
         assert "Arial" in content
         assert content.count('w:name="Calibri"') == 1  # not duplicated
         assert any("1 font" in m for m in log)
+
+    def test_multiple_existing_fonts_only_missing_added(self, tmp_path):
+        """Target with multiple fonts — only truly missing ones added."""
+        extract = _setup_extract_dir(tmp_path)
+        font_path = extract / "word" / "fontTable.xml"
+        multi_font_xml = (
+            '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+            '<w:fonts xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">'
+            '  <w:font w:name="Calibri"><w:panose1 w:val="020F0502020204030204"/></w:font>'
+            '  <w:font w:name="Times New Roman"><w:panose1 w:val="02020603050405020304"/></w:font>'
+            '</w:fonts>'
+        )
+        font_path.write_text(multi_font_xml, encoding="utf-8")
+
+        arch_font_xml = (
+            '<w:fonts xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">'
+            '  <w:font w:name="Calibri"><w:panose1 w:val="020F0502020204030204"/></w:font>'
+            '  <w:font w:name="Times New Roman"><w:panose1 w:val="02020603050405020304"/></w:font>'
+            '  <w:font w:name="Arial"><w:panose1 w:val="020B0604020202020204"/></w:font>'
+            '</w:fonts>'
+        )
+        registry = {"fonts": {"font_table_xml": arch_font_xml}}
+
+        log = []
+        apply_font_table(extract, registry, log)
+
+        content = font_path.read_text(encoding="utf-8")
+        assert "Arial" in content
+        assert content.count('w:name="Calibri"') == 1
+        assert content.count('w:name="Times New Roman"') == 1
 
     def test_skips_when_all_present(self, tmp_path):
         extract = _setup_extract_dir(tmp_path)
