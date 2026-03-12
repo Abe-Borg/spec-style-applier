@@ -142,7 +142,7 @@ def classify_target_document(
     slim_bundle: dict,
     available_roles: list,
     api_key: str,
-    model: str = "claude-sonnet-4-20250514"
+    model: str = "claude-opus-4-6"
 ) -> dict:
     """
     Classify paragraphs in a slim bundle using the Anthropic API.

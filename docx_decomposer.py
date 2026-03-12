@@ -141,7 +141,7 @@ def main():
         help="Run full automated pipeline: extract -> classify -> apply -> format"
     )
     parser.add_argument("--api-key", default=None, help="Anthropic API key (default: ANTHROPIC_API_KEY env var)")
-    parser.add_argument("--model", default="claude-sonnet-4-20250514", help="LLM model for classification")
+    parser.add_argument("--model", default="claude-opus-4-6", help="LLM model for classification")
 
     args = parser.parse_args()
 
