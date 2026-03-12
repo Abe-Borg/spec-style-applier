@@ -15,7 +15,7 @@ from typing import List
 from arch_env_applier import apply_environment_to_target
 
 try:
-    from numbering_importer import import_numbering
+    from numbering_importer import import_numbering, extract_used_num_ids_from_styles
     HAS_NUMBERING_IMPORTER = True
 except ImportError:
     HAS_NUMBERING_IMPORTER = False
@@ -35,6 +35,21 @@ from core.registry import (
     write_phase2_preflight,
     build_arch_styles_xml_from_registry,
 )
+
+
+def _check_numbering_module_needed(arch_styles_xml: str, needed_style_ids: list) -> None:
+    """Raise if styles need numbering but numbering_importer is unavailable."""
+    # Lightweight regex check: look for numId references in any needed style
+    import re
+    for sid in needed_style_ids:
+        pat = r'<w:style[^>]*w:styleId="' + re.escape(sid) + r'"[^>]*>[\s\S]*?</w:style>'
+        m = re.search(pat, arch_styles_xml)
+        if m and '<w:numId' in m.group(0):
+            raise ImportError(
+                "numbering_importer module is not available but imported styles "
+                f"require numbering definitions (e.g. style '{sid}'). "
+                "Ensure numbering_importer.py is on the Python path."
+            )
 
 
 class DocxDecomposer:
@@ -318,21 +333,21 @@ def main():
         # Import numbering definitions
         style_numid_remap = {}
         if HAS_NUMBERING_IMPORTER and arch_template_registry_path.exists():
-            try:
-                log.append("")
-                log.append("=" * 60)
-                log.append("IMPORTING NUMBERING DEFINITIONS")
-                log.append("=" * 60)
+            log.append("")
+            log.append("=" * 60)
+            log.append("IMPORTING NUMBERING DEFINITIONS")
+            log.append("=" * 60)
 
-                style_numid_remap = import_numbering(
-                    target_extract_dir=extract_dir,
-                    arch_template_registry=env_registry,
-                    arch_styles_xml=arch_styles_xml,
-                    style_ids_to_import=needed_style_ids,
-                    log=log
-                )
-            except Exception as e:
-                log.append(f"WARNING: Numbering import failed: {e}")
+            style_numid_remap = import_numbering(
+                target_extract_dir=extract_dir,
+                arch_template_registry=env_registry,
+                arch_styles_xml=arch_styles_xml,
+                style_ids_to_import=needed_style_ids,
+                log=log
+            )
+        elif not HAS_NUMBERING_IMPORTER:
+            # Check whether numbering is actually needed before silently skipping
+            _check_numbering_module_needed(arch_styles_xml, needed_style_ids)
 
         log.append("")
         log.append("=" * 60)

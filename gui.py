@@ -19,6 +19,20 @@ import tkinter as tk
 from tkinter import ttk, filedialog, messagebox, scrolledtext
 
 
+def _check_numbering_module_needed(arch_styles_xml: str, needed_style_ids: list) -> None:
+    """Raise if styles need numbering but numbering_importer is unavailable."""
+    import re
+    for sid in needed_style_ids:
+        pat = r'<w:style[^>]*w:styleId="' + re.escape(sid) + r'"[^>]*>[\s\S]*?</w:style>'
+        m = re.search(pat, arch_styles_xml)
+        if m and '<w:numId' in m.group(0):
+            raise ImportError(
+                "numbering_importer module is not available but imported styles "
+                f"require numbering definitions (e.g. style '{sid}'). "
+                "Ensure numbering_importer.py is on the Python path."
+            )
+
+
 class Phase2GUI:
     def __init__(self, root: tk.Tk):
         self.root = root
@@ -306,16 +320,16 @@ class Phase2GUI:
         # Import numbering
         style_numid_remap = {}
         if has_numbering:
-            try:
-                style_numid_remap = import_numbering(
-                    target_extract_dir=extract_dir,
-                    arch_template_registry=env_registry,
-                    arch_styles_xml=arch_styles_xml,
-                    style_ids_to_import=needed_style_ids,
-                    log=log
-                )
-            except Exception as e:
-                log.append(f"WARNING: Numbering import failed: {e}")
+            style_numid_remap = import_numbering(
+                target_extract_dir=extract_dir,
+                arch_template_registry=env_registry,
+                arch_styles_xml=arch_styles_xml,
+                style_ids_to_import=needed_style_ids,
+                log=log
+            )
+        else:
+            # Check whether numbering is actually needed before silently skipping
+            _check_numbering_module_needed(arch_styles_xml, needed_style_ids)
 
         import_arch_styles_into_target(
             target_extract_dir=extract_dir,
