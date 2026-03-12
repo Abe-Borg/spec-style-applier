@@ -9,6 +9,16 @@ import re
 from pathlib import Path
 from typing import Dict, List, Set, Optional
 
+# Word built-in styles that exist implicitly in every DOCX.
+# These never need to be imported — Word creates them internally
+# even when styles.xml has no explicit <w:style> block for them.
+WORD_BUILTIN_STYLE_IDS = frozenset({
+    "Normal",
+    "DefaultParagraphFont",
+    "TableNormal",
+    "NoList",
+})
+
 
 def _extract_style_block(styles_xml_text: str, style_id: str) -> Optional[str]:
     m = re.search(
@@ -354,6 +364,12 @@ def import_arch_styles_into_target(
     missing: List[str] = []
     for sid in sorted(expanded):
         if sid in existing:
+            continue
+
+        # Word built-in styles exist implicitly — skip them when absent
+        # from both architect and target rather than failing.
+        if sid in WORD_BUILTIN_STYLE_IDS:
+            log.append(f"Skipped built-in style dependency (implicit in Word): {sid}")
             continue
 
         blk = extract_style_block_raw(arch_styles_text, sid)
