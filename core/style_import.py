@@ -295,7 +295,7 @@ def materialize_arch_style_block(style_block: str, style_id: str, arch_styles_xm
 
 def _collect_style_deps_from_arch(arch_styles_text: str, style_id: str, seen: Set[str]) -> None:
     """
-    Recursively collect styleId dependencies via <w:basedOn w:val="..."/>.
+    Recursively collect styleId dependencies via basedOn, link, and next references.
     """
     if style_id in seen:
         return
@@ -305,11 +305,12 @@ def _collect_style_deps_from_arch(arch_styles_text: str, style_id: str, seen: Se
     if not blk:
         return
 
-    m = re.search(r'<w:basedOn\b[^>]*w:val="([^"]+)"', blk)
-    if m:
-        base = m.group(1)
-        if base and base not in seen:
-            _collect_style_deps_from_arch(arch_styles_text, base, seen)
+    for tag in ('basedOn', 'link', 'next'):
+        m = re.search(rf'<w:{tag}\b[^>]*w:val="([^"]+)"', blk)
+        if m:
+            ref = m.group(1)
+            if ref and ref not in seen:
+                _collect_style_deps_from_arch(arch_styles_text, ref, seen)
 
 
 def extract_style_block_raw(styles_xml_text: str, style_id: str) -> Optional[str]:
