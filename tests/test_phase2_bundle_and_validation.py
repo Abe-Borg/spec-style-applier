@@ -7,6 +7,8 @@ from core.classification import (
     build_phase2_slim_bundle,
     preclassify_paragraphs,
     validate_phase2_classification_contract,
+    validate_phase2_final_payload,
+    coerce_to_final_classifications,
     PHASE2_MASTER_PROMPT,
     PHASE2_RUN_INSTRUCTION,
 )
@@ -81,5 +83,39 @@ def test_validation_fails_on_duplicate_and_missing_coverage():
         validate_phase2_classification_contract(
             bundle,
             {"classifications": [{"paragraph_index": 10, "csi_role": "PART"}]},
+            ["PART", "ARTICLE"],
+        )
+
+
+def test_coerce_unresolved_only_merges_deterministic():
+    bundle = {
+        "paragraphs": [{"paragraph_index": 11}],
+        "deterministic_classifications": [{"paragraph_index": 10, "csi_role": "PART"}],
+    }
+    out = coerce_to_final_classifications(
+        bundle,
+        {"classifications": [{"paragraph_index": 11, "csi_role": "ARTICLE"}]},
+        ["PART", "ARTICLE"],
+    )
+    assert out["classifications"] == [
+        {"paragraph_index": 10, "csi_role": "PART"},
+        {"paragraph_index": 11, "csi_role": "ARTICLE"},
+    ]
+
+
+def test_coerce_rejects_deterministic_override():
+    bundle = {
+        "paragraphs": [{"paragraph_index": 11}],
+        "deterministic_classifications": [{"paragraph_index": 10, "csi_role": "PART"}],
+    }
+    with pytest.raises(ValueError, match="deterministic override"):
+        validate_phase2_final_payload(
+            bundle,
+            {
+                "classifications": [
+                    {"paragraph_index": 10, "csi_role": "ARTICLE"},
+                    {"paragraph_index": 11, "csi_role": "ARTICLE"},
+                ]
+            },
             ["PART", "ARTICLE"],
         )

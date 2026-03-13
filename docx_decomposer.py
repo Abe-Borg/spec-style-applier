@@ -25,7 +25,7 @@ from core.classification import (
     PHASE2_RUN_INSTRUCTION,
     build_phase2_slim_bundle,
     apply_phase2_classifications,
-    validate_phase2_classification_contract,
+    coerce_to_final_classifications,
 )
 from core.stability import snapshot_stability, verify_stability
 from core.style_import import import_arch_styles_into_target
@@ -210,6 +210,9 @@ def main():
         print("3. Paste the content of: phase2_slim_bundle.json")
         print("4. Paste the content of: run_instruction.txt")
         print("5. Save LLM JSON output as: phase2_classifications.json")
+        print("   - Classify only unresolved paragraphs from bundle['paragraphs']")
+        print("   - Apply step auto-merges deterministic classifications")
+        print("   - Apply also accepts already-merged final classifications")
         print("6. Run Phase 2 apply:")
         print(f'   python docx_decomposer.py {args.docx_path} --phase2-arch-extract <arch_folder> --phase2-classifications phase2_classifications.json')
         return
@@ -220,11 +223,6 @@ def main():
     if args.classify:
         if not args.phase2_arch_extract:
             print("Error: --classify requires --phase2-arch-extract")
-            sys.exit(1)
-
-        api_key = args.api_key or os.environ.get("ANTHROPIC_API_KEY")
-        if not api_key:
-            print("Error: --classify requires --api-key or ANTHROPIC_API_KEY environment variable")
             sys.exit(1)
 
         from core.llm_classifier import classify_target_document
@@ -243,7 +241,14 @@ def main():
             args.phase2_discipline,
             available_roles=available_roles
         )
-        print(f"Built slim bundle: {len(bundle.get('paragraphs', []))} paragraphs")
+        unresolved = len(bundle.get("paragraphs", []))
+        deterministic = len(bundle.get("deterministic_classifications", []))
+        print(f"Built slim bundle: {unresolved} unresolved + {deterministic} deterministic = {unresolved + deterministic} total")
+
+        api_key = args.api_key or os.environ.get("ANTHROPIC_API_KEY")
+        if unresolved > 0 and not api_key:
+            print("Error: --classify requires --api-key or ANTHROPIC_API_KEY environment variable when unresolved paragraphs exist")
+            sys.exit(1)
 
         # Classify via LLM
         print(f"Classifying with {args.model}...")
@@ -286,15 +291,14 @@ def main():
             args.phase2_discipline,
             available_roles=available_roles,
         )
-        merged_for_validation = {
-            "classifications": list(validation_bundle.get("deterministic_classifications", []))
-            + list(classifications.get("classifications", []))
-        }
-        validate_phase2_classification_contract(
+        classifications = coerce_to_final_classifications(
             validation_bundle,
-            merged_for_validation,
-            allowed_roles=available_roles,
+            classifications,
+            available_roles,
         )
+        normalized_path = extract_dir / "phase2_classifications.normalized.json"
+        normalized_path.write_text(json.dumps(classifications, indent=2), encoding="utf-8")
+        print(f"Normalized classifications saved: {normalized_path}")
 
         # Preflight report
         preflight_path = extract_dir / "phase2_preflight.json"

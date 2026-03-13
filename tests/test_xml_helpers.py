@@ -9,6 +9,7 @@ from core.xml_helpers import (
     paragraph_contains_sectpr,
     paragraph_pstyle_from_block,
     paragraph_numpr_from_block,
+    strip_conflicting_direct_ppr,
 )
 
 
@@ -74,6 +75,26 @@ class TestStripRunFontFormatting:
     def test_no_font_formatting_unchanged(self):
         p = '<w:p><w:r><w:rPr><w:b/><w:i/></w:rPr><w:t>BI</w:t></w:r></w:p>'
         result = strip_run_font_formatting(p)
+        assert result == p
+
+
+class TestStripConflictingDirectPpr:
+    def test_removes_jc_ind_spacing_but_keeps_numpr(self):
+        p = (
+            '<w:p><w:pPr>'
+            '<w:numPr><w:numId w:val="4"/><w:ilvl w:val="1"/></w:numPr>'
+            '<w:jc w:val="center"/><w:ind w:left="720"/><w:spacing w:before="120"/>'
+            '</w:pPr><w:r><w:t>X</w:t></w:r></w:p>'
+        )
+        result = strip_conflicting_direct_ppr(p)
+        assert '<w:jc' not in result
+        assert '<w:ind' not in result
+        assert '<w:spacing' not in result
+        assert '<w:numPr>' in result
+
+    def test_sectpr_unchanged(self):
+        p = '<w:p><w:pPr><w:sectPr/><w:jc w:val="center"/></w:pPr></w:p>'
+        result = strip_conflicting_direct_ppr(p)
         assert result == p
 
     def test_multiple_runs(self):

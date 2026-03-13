@@ -180,6 +180,33 @@ def strip_run_font_formatting(p_xml: str) -> str:
     return result
 
 
+_DIRECT_PPR_OVERRIDE_TAGS = ("jc", "ind", "spacing")
+
+
+def strip_conflicting_direct_ppr(p_xml: str) -> str:
+    """
+    Remove direct paragraph-layout overrides that commonly win over paragraph styles.
+
+    Strips these tags from paragraph-level <w:pPr> only:
+    - <w:jc>
+    - <w:ind>
+    - <w:spacing>
+
+    Preserves numbering, section properties, and other pPr children.
+    """
+    if "<w:sectPr" in p_xml:
+        return p_xml
+
+    def _strip_from_ppr(match):
+        ppr = match.group(0)
+        for tag in _DIRECT_PPR_OVERRIDE_TAGS:
+            ppr = re.sub(rf'<w:{tag}\b[^>]*/>', '', ppr)
+            ppr = re.sub(rf'<w:{tag}\b[^>]*>[\s\S]*?</w:{tag}>', '', ppr, flags=re.S)
+        return ppr
+
+    return re.sub(r'<w:pPr\b[^>]*>[\s\S]*?</w:pPr>', _strip_from_ppr, p_xml, count=1, flags=re.S)
+
+
 def _paragraph_style_id(p_xml: str) -> Optional[str]:
     m = re.search(r'<w:pStyle\b[^>]*w:val="([^"]+)"', p_xml)
     return m.group(1) if m else None

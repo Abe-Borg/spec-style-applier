@@ -174,10 +174,6 @@ class Phase2GUI:
         if not self.arch_var.get():
             messagebox.showerror("Error", "Please select an architect template folder.")
             return False
-        if not self.api_key_var.get():
-            messagebox.showerror("Error", "Please provide an Anthropic API key.")
-            return False
-
         arch_path = Path(self.arch_var.get())
         if not (arch_path / "arch_style_registry.json").exists():
             messagebox.showerror("Error",
@@ -275,7 +271,12 @@ class Phase2GUI:
         # Build slim bundle
         self._log("  Building slim bundle...")
         bundle = build_phase2_slim_bundle(extract_dir, discipline, available_roles=available_roles)
-        self._log(f"  Bundle: {len(bundle.get('paragraphs', []))} paragraphs")
+        unresolved = len(bundle.get("paragraphs", []))
+        deterministic = len(bundle.get("deterministic_classifications", []))
+        self._log(f"  Bundle: {unresolved} unresolved + {deterministic} deterministic = {unresolved + deterministic} total")
+
+        if unresolved > 0 and not api_key:
+            raise ValueError("Anthropic API key is required when unresolved paragraphs exist.")
 
         # Classify
         self._log(f"  Classifying with LLM...")
@@ -377,9 +378,9 @@ class Phase2GUI:
         patch_docx(src_docx=docx_path, out_docx=output_docx_path, replacements=replacements)
 
         # Coverage
-        total = len(bundle.get("paragraphs", []))
+        total = len(bundle.get("paragraphs", [])) + len(bundle.get("deterministic_classifications", []))
         classified = len(classifications.get("classifications", []))
-        coverage = (classified / total * 100) if total > 0 else 0
+        coverage = (classified / total * 100) if total > 0 else 100.0
 
         self._log(f"  Output: {output_docx_path}")
         self._log(f"  Coverage: {classified}/{total} ({coverage:.1f}%)")

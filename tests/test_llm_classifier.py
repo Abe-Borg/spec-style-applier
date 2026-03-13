@@ -20,12 +20,13 @@ class _FakeStream:
 
 
 class _FakeMessages:
-    def __init__(self):
+    def __init__(self, payload='{"classifications": []}'):
         self.last_kwargs = None
+        self.payload = payload
 
     def stream(self, **kwargs):
         self.last_kwargs = kwargs
-        return _FakeStream('{"classifications": []}')
+        return _FakeStream(self.payload)
 
 
 class _FakeClient:
@@ -41,6 +42,22 @@ def test_output_config_is_dict(monkeypatch):
 
     bundle = {
         "paragraphs": [],
+        "available_roles": ["PART"],
+        "deterministic_classifications": [],
+    }
+    result = classify_target_document(bundle, ["PART"], api_key="x", model="m")
+    assert fake.messages.last_kwargs is None
+    assert result["notes"] == ["LLM skipped: all paragraphs classified deterministically."]
+
+
+def test_classify_calls_llm_for_unresolved(monkeypatch):
+    fake = _FakeClient()
+    fake.messages.payload = '{"classifications": [{"paragraph_index": 3, "csi_role": "PART"}]}'
+    fake_anthropic = types.SimpleNamespace(Anthropic=lambda api_key: fake)
+    monkeypatch.setitem(__import__("sys").modules, "anthropic", fake_anthropic)
+
+    bundle = {
+        "paragraphs": [{"paragraph_index": 3, "text": "A"}],
         "available_roles": ["PART"],
         "deterministic_classifications": [],
     }

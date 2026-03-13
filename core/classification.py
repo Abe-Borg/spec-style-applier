@@ -17,6 +17,7 @@ from core.xml_helpers import (
     paragraph_ppr_hints_from_block,
     apply_pstyle_to_paragraph_block,
     strip_run_font_formatting,
+    strip_conflicting_direct_ppr,
 )
 from core.style_import import ensure_explicit_numpr_from_current_style
 
@@ -127,13 +128,29 @@ def _in_any_range(pos: int, ranges: List[Tuple[int, int]]) -> bool:
 
 
 def _extract_rpr_hints(p_xml: str) -> Dict[str, Any]:
+    def _ooxml_on_off_state(tag: str) -> Optional[bool]:
+        m = re.search(rf"<w:{tag}\b([^>]*)/?>", p_xml)
+        if not m:
+            return None
+        attrs = m.group(1) or ""
+        vm = re.search(r'w:val\s*=\s*"([^"]+)"', attrs)
+        if not vm:
+            return True
+        val = vm.group(1).strip().lower()
+        if val in {"false", "0", "off", "none"}:
+            return False
+        return True
+
     hints: Dict[str, Any] = {}
-    if re.search(r"<w:b\b", p_xml):
-        hints["bold"] = True
-    if re.search(r"<w:i\b", p_xml):
-        hints["italic"] = True
-    if re.search(r"<w:u\b", p_xml):
-        hints["underline"] = True
+    bold = _ooxml_on_off_state("b")
+    italic = _ooxml_on_off_state("i")
+    underline = _ooxml_on_off_state("u")
+    if bold is not None:
+        hints["bold"] = bold
+    if italic is not None:
+        hints["italic"] = italic
+    if underline is not None:
+        hints["underline"] = underline
     return hints
 
 
@@ -330,7 +347,11 @@ def build_phase2_slim_bundle(
     }
 
 
-def validate_phase2_classification_contract(bundle: Dict[str, Any], classifications: Dict[str, Any], allowed_roles: List[str]) -> None:
+def _validate_payload_shape(
+    classifications: Dict[str, Any],
+    allowed_roles: List[str],
+    allowed_indices: Set[int],
+) -> Dict[int, str]:
     if not isinstance(classifications, dict):
         raise ValueError("classifications payload must be an object")
     items = classifications.get("classifications")
@@ -338,7 +359,6 @@ def validate_phase2_classification_contract(bundle: Dict[str, Any], classificati
         raise ValueError("classifications payload missing classifications list")
 
     allowed = set(allowed_roles)
-    classifiable_indices = {p["paragraph_index"] for p in bundle.get("paragraphs", [])}
     seen: Dict[int, str] = {}
     for item in items:
         if not isinstance(item, dict):
@@ -349,15 +369,76 @@ def validate_phase2_classification_contract(bundle: Dict[str, Any], classificati
             raise ValueError(f"invalid paragraph_index: {idx!r}")
         if idx in seen:
             raise ValueError(f"duplicate classification for paragraph_index={idx}")
-        if idx not in classifiable_indices:
+        if idx not in allowed_indices:
             raise ValueError(f"classification index not classifiable: {idx}")
         if role not in allowed:
             raise ValueError(f"invalid csi_role for paragraph_index={idx}: {role!r}")
         seen[idx] = role
 
-    missing = sorted(classifiable_indices - set(seen.keys()))
+    return seen
+
+
+def validate_phase2_llm_payload(bundle: Dict[str, Any], classifications: Dict[str, Any], allowed_roles: List[str]) -> None:
+    unresolved = {p["paragraph_index"] for p in bundle.get("paragraphs", [])}
+    seen = _validate_payload_shape(classifications, allowed_roles, unresolved)
+    missing = sorted(unresolved - set(seen.keys()))
     if missing:
         raise ValueError(f"missing coverage for paragraph indices: {missing[:20]}")
+
+
+def coerce_to_final_classifications(
+    bundle: Dict[str, Any],
+    classifications: Dict[str, Any],
+    allowed_roles: List[str],
+) -> Dict[str, Any]:
+    unresolved = {p["paragraph_index"] for p in bundle.get("paragraphs", [])}
+    deterministic: Dict[int, str] = {
+        item["paragraph_index"]: item["csi_role"]
+        for item in bundle.get("deterministic_classifications", [])
+        if isinstance(item, dict)
+        and isinstance(item.get("paragraph_index"), int)
+        and isinstance(item.get("csi_role"), str)
+    }
+    total = set(deterministic.keys()) | unresolved
+
+    incoming = _validate_payload_shape(classifications, allowed_roles, total)
+    incoming_indices = set(incoming.keys())
+
+    if incoming_indices <= unresolved:
+        missing_unresolved = sorted(unresolved - incoming_indices)
+        if missing_unresolved:
+            raise ValueError(f"missing coverage for paragraph indices: {missing_unresolved[:20]}")
+        merged = dict(deterministic)
+        merged.update(incoming)
+    elif incoming_indices == total:
+        for idx, expected in deterministic.items():
+            actual = incoming.get(idx)
+            if actual != expected:
+                raise ValueError(
+                    f"deterministic override attempted at paragraph_index={idx}: "
+                    f"expected {expected!r}, got {actual!r}"
+                )
+        merged = incoming
+    else:
+        raise ValueError("payload is neither unresolved-only nor valid final coverage")
+
+    notes = classifications.get("notes", []) if isinstance(classifications, dict) else []
+    return {
+        "classifications": [
+            {"paragraph_index": idx, "csi_role": role}
+            for idx, role in sorted(merged.items())
+        ],
+        "notes": notes if isinstance(notes, list) else [],
+    }
+
+
+def validate_phase2_final_payload(bundle: Dict[str, Any], classifications: Dict[str, Any], allowed_roles: List[str]) -> None:
+    coerce_to_final_classifications(bundle, classifications, allowed_roles)
+
+
+def validate_phase2_classification_contract(bundle: Dict[str, Any], classifications: Dict[str, Any], allowed_roles: List[str]) -> None:
+    # Backward-compatible alias: strict unresolved-only LLM payload validation.
+    validate_phase2_llm_payload(bundle, classifications, allowed_roles)
 
 
 def _normalize_paragraph_for_contract(p_xml: str) -> str:
@@ -373,6 +454,13 @@ def _normalize_paragraph_for_contract(p_xml: str) -> str:
     out = re.sub(r"<w:pStyle\b[^>]*/>", "", out)
     # Strip numPr (we may materialize this)
     out = re.sub(r"<w:numPr\b[^>]*>[\s\S]*?</w:numPr>", "", out, flags=re.S)
+    # Strip direct pPr overrides now allowed to be removed during apply
+    out = re.sub(r"<w:jc\b[^>]*/>", "", out)
+    out = re.sub(r"<w:jc\b[^>]*>[\s\S]*?</w:jc>", "", out, flags=re.S)
+    out = re.sub(r"<w:ind\b[^>]*/>", "", out)
+    out = re.sub(r"<w:ind\b[^>]*>[\s\S]*?</w:ind>", "", out, flags=re.S)
+    out = re.sub(r"<w:spacing\b[^>]*/>", "", out)
+    out = re.sub(r"<w:spacing\b[^>]*>[\s\S]*?</w:spacing>", "", out, flags=re.S)
     # Strip run-level font formatting (we now strip this too)
     out = re.sub(r"<w:rFonts\b[^>]*/>", "", out)
     out = re.sub(r"<w:rFonts\b[^>]*>[\s\S]*?</w:rFonts>", "", out, flags=re.S)
@@ -455,6 +543,9 @@ def apply_phase2_classifications(
         pb = para_blocks[idx]
         pb = ensure_explicit_numpr_from_current_style(pb, styles_xml_text)
 
+        # Strip direct paragraph-level layout overrides that beat paragraph styles
+        pb = strip_conflicting_direct_ppr(pb)
+
         # Strip run-level font formatting so style fonts take effect
         pb = strip_run_font_formatting(pb)
 
@@ -464,6 +555,7 @@ def apply_phase2_classifications(
 
     # Log summary
     log.append(f"Applied styles to {len(modified_indices)} paragraphs")
+    log.append(f"Removed direct paragraph layout overrides (jc/ind/spacing) from modified paragraphs")
     log.append(f"Stripped run-level font formatting from modified paragraphs")
 
     # Enforce the diff contract.
