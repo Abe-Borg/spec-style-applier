@@ -178,7 +178,7 @@ def classify_target_document(
                     max_tokens=128000,
                     temperature=1,
                     thinking = {"type": "adaptive"},
-                    output_config = {"effort", "high"},
+                    output_config = {"effort": "high"},
                     system=PHASE2_MASTER_PROMPT.strip(),
                     messages=[{"role": "user", "content": user_message}]
                 ) as stream:
