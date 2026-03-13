@@ -334,12 +334,20 @@ def extract_style_block_raw(styles_xml_text: str, style_id: str) -> Optional[str
     return m.group(1) + "\n" if m else None
 
 
+def _replace_style_block_in_xml(styles_xml: str, style_id: str, new_block: str) -> str:
+    """Replace an existing <w:style> block in styles_xml with new_block."""
+    sid = re.escape(style_id)
+    pattern = rf'<w:style\b[^>]*w:styleId="{sid}"[^>]*>[\s\S]*?</w:style>'
+    return re.sub(pattern, new_block.strip(), styles_xml, count=1)
+
+
 def import_arch_styles_into_target(
     target_extract_dir: Path,
     arch_styles_xml: str,
     needed_style_ids: List[str],
     log: List[str],
-    style_numid_remap: Optional[Dict[str, Dict[str, int]]] = None
+    style_numid_remap: Optional[Dict[str, Dict[str, int]]] = None,
+    overwrite_existing: bool = False,
 ) -> None:
     """
     Copy specific style blocks from architect styles.xml into target styles.xml (idempotent),
@@ -361,9 +369,10 @@ def import_arch_styles_into_target(
         _collect_style_deps_from_arch(arch_styles_text, sid, expanded)
 
     blocks: List[str] = []
+    overwrite_blocks: List[str] = []
     missing: List[str] = []
     for sid in sorted(expanded):
-        if sid in existing:
+        if sid in existing and not overwrite_existing:
             continue
 
         # Word built-in styles exist implicitly — skip them when absent
@@ -399,9 +408,12 @@ def import_arch_styles_into_target(
         # HARDEN: make style self-contained (pPr/rPr) to prevent font drift
         blk = materialize_arch_style_block(blk, sid, arch_styles_text)
 
-        blocks.append(blk)
-
-        log.append(f"Imported style from architect: {sid}")
+        if sid in existing and overwrite_existing:
+            overwrite_blocks.append((sid, blk))
+            log.append(f"Overwriting existing style with architect version: {sid}")
+        else:
+            blocks.append(blk)
+            log.append(f"Imported style from architect: {sid}")
 
     # Priority-1 hardening: if the architect template is missing any required style or dependency,
     # fail fast rather than emitting a partially formatted output.
@@ -412,10 +424,19 @@ def import_arch_styles_into_target(
             f"{missing_sorted}"
         )
 
-    if not blocks:
+    if not blocks and not overwrite_blocks:
         return
 
-    tgt_new = insert_styles_into_styles_xml(tgt_styles_text, blocks)
+    tgt_new = tgt_styles_text
+
+    # Apply overwrites first (replace existing blocks in place)
+    for sid, blk in overwrite_blocks:
+        tgt_new = _replace_style_block_in_xml(tgt_new, sid, blk)
+
+    # Then insert new styles
+    if blocks:
+        tgt_new = insert_styles_into_styles_xml(tgt_new, blocks)
+
     if tgt_new != tgt_styles_text:
         tgt_styles_path.write_text(tgt_new, encoding="utf-8")
 

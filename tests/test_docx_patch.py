@@ -55,11 +55,15 @@ class TestValidateXmlWellformedness:
 # ── patch_docx integration ──────────────────────────────────────────────────
 
 
+def _make_minimal_docx(path: Path) -> None:
+    """Create a minimal valid DOCX (ZIP with one XML entry)."""
+    with zipfile.ZipFile(path, "w") as zf:
+        zf.writestr("word/document.xml", b"<w:document" + _W_NS + b"/>")
+
+
 class TestPatchDocxXmlValidation:
     def _make_minimal_docx(self, path: Path) -> None:
-        """Create a minimal valid DOCX (ZIP with one XML entry)."""
-        with zipfile.ZipFile(path, "w") as zf:
-            zf.writestr("word/document.xml", b"<w:document" + _W_NS + b"/>")
+        _make_minimal_docx(path)
 
     def test_malformed_xml_prevents_repack(self, tmp_path):
         src = tmp_path / "input.docx"
@@ -85,3 +89,91 @@ class TestPatchDocxXmlValidation:
             replacements={"word/document.xml": b"<w:document" + _W_NS + b"><w:body/></w:document>"},
         )
         assert out.exists()
+
+
+# ── Sync mode allowlist tests ─────────────────────────────────────────────
+
+
+class TestPatchDocxSyncModes:
+    """Tests for body_only vs template_sync patch target allowlists."""
+
+    def test_body_only_rejects_header_patch(self, tmp_path):
+        src = tmp_path / "input.docx"
+        out = tmp_path / "output.docx"
+        _make_minimal_docx(src)
+
+        with pytest.raises(RuntimeError, match="Forbidden patch target"):
+            patch_docx(
+                src_docx=src,
+                out_docx=out,
+                replacements={"word/header1.xml": b"<w:hdr" + _W_NS + b"/>"},
+                sync_mode="body_only",
+            )
+
+    def test_body_only_rejects_footer_patch(self, tmp_path):
+        src = tmp_path / "input.docx"
+        out = tmp_path / "output.docx"
+        _make_minimal_docx(src)
+
+        with pytest.raises(RuntimeError, match="Forbidden patch target"):
+            patch_docx(
+                src_docx=src,
+                out_docx=out,
+                replacements={"word/footer1.xml": b"<w:ftr" + _W_NS + b"/>"},
+                sync_mode="body_only",
+            )
+
+    def test_template_sync_allows_header_patch(self, tmp_path):
+        src = tmp_path / "input.docx"
+        out = tmp_path / "output.docx"
+        _make_minimal_docx(src)
+
+        patch_docx(
+            src_docx=src,
+            out_docx=out,
+            replacements={"word/header1.xml": b"<w:hdr" + _W_NS + b"/>"},
+            sync_mode="template_sync",
+        )
+        assert out.exists()
+
+    def test_template_sync_allows_footer_patch(self, tmp_path):
+        src = tmp_path / "input.docx"
+        out = tmp_path / "output.docx"
+        _make_minimal_docx(src)
+
+        patch_docx(
+            src_docx=src,
+            out_docx=out,
+            replacements={"word/footer1.xml": b"<w:ftr" + _W_NS + b"/>"},
+            sync_mode="template_sync",
+        )
+        assert out.exists()
+
+    def test_body_only_allows_styles_patch(self, tmp_path):
+        src = tmp_path / "input.docx"
+        out = tmp_path / "output.docx"
+        _make_minimal_docx(src)
+
+        patch_docx(
+            src_docx=src,
+            out_docx=out,
+            replacements={"word/styles.xml": b"<w:styles" + _W_NS + b"/>"},
+            sync_mode="body_only",
+        )
+        assert out.exists()
+
+    def test_illegal_target_rejected_in_both_modes(self, tmp_path):
+        src = tmp_path / "input.docx"
+        out = tmp_path / "output.docx"
+        _make_minimal_docx(src)
+
+        for mode in ("body_only", "template_sync"):
+            if out.exists():
+                out.unlink()
+            with pytest.raises(RuntimeError, match="Illegal patch target"):
+                patch_docx(
+                    src_docx=src,
+                    out_docx=out,
+                    replacements={"word/media/image1.png": b"\x89PNG"},
+                    sync_mode=mode,
+                )

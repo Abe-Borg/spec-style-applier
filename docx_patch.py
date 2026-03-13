@@ -27,6 +27,7 @@ def patch_docx(
     src_docx: Path,
     out_docx: Path,
     replacements: Dict[str, BytesOrStr],
+    sync_mode: str = "body_only",
 ) -> None:
     """
     Create out_docx by copying every ZIP entry from src_docx unchanged,
@@ -46,15 +47,7 @@ def patch_docx(
             rep_bytes[k] = v
 
     # Phase 2 hard invariants — enforce at patch boundary
-    FORBIDDEN_PREFIXES = (
-        "word/header",
-        "word/footer",
-    )
-
-    FORBIDDEN_EXACT = set()
-
-    # Expanded to include environment parts
-    ALLOWED_PATCHES = {
+    ALLOWED_PATCHES_BODY_ONLY = {
         "word/document.xml",
         "word/styles.xml",
         "word/theme/theme1.xml",
@@ -65,18 +58,33 @@ def patch_docx(
         "word/_rels/document.xml.rels",
     }
 
+    FORBIDDEN_PREFIXES_BODY_ONLY = (
+        "word/header",
+        "word/footer",
+    )
+
+    if sync_mode == "template_sync":
+        allowed = set(ALLOWED_PATCHES_BODY_ONLY)
+        forbidden_prefixes: tuple = ()
+    else:
+        allowed = ALLOWED_PATCHES_BODY_ONLY
+        forbidden_prefixes = FORBIDDEN_PREFIXES_BODY_ONLY
+
     for name in rep_bytes:
-        if name in FORBIDDEN_EXACT:
-            raise RuntimeError(f"Forbidden patch target: {name}")
+        if forbidden_prefixes and name.startswith(forbidden_prefixes):
+            raise RuntimeError(f"Forbidden patch target in {sync_mode} mode: {name}")
 
-        if name.startswith(FORBIDDEN_PREFIXES):
-            raise RuntimeError(f"Forbidden patch target: {name}")
-
-        if name not in ALLOWED_PATCHES:
-            raise RuntimeError(
-                f"Illegal patch target: {name}\n"
-                f"Allowed: {sorted(ALLOWED_PATCHES)}"
-            )
+        # In template_sync mode, allow header/footer patches through prefix check
+        if name not in allowed:
+            if sync_mode == "template_sync" and (
+                name.startswith("word/header") or name.startswith("word/footer")
+            ):
+                pass  # allowed in template_sync
+            else:
+                raise RuntimeError(
+                    f"Illegal patch target: {name}\n"
+                    f"Allowed in {sync_mode} mode: {sorted(allowed)}"
+                )
 
     # Validate XML well-formedness before writing — refuse to build a broken DOCX
     xml_errors = validate_xml_wellformedness(rep_bytes)

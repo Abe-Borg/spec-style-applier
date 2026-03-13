@@ -13,6 +13,8 @@ from core.xml_helpers import (
     paragraph_text_from_block,
     paragraph_contains_sectpr,
     paragraph_numpr_from_block,
+    paragraph_pstyle_from_block,
+    paragraph_ppr_hints_from_block,
     apply_pstyle_to_paragraph_block,
     strip_run_font_formatting,
 )
@@ -22,26 +24,25 @@ from core.style_import import ensure_explicit_numpr_from_current_style
 PHASE2_MASTER_PROMPT = r'''
 You are a CSI STRUCTURE CLASSIFIER for AEC specifications.
 
-You will be given:
-1. A slim JSON bundle of paragraphs from a mechanical or plumbing spec
-2. A list of AVAILABLE ROLES that the target architect template supports
+Some paragraphs have already been pre-classified deterministically by a rule-based
+engine.  You will ONLY receive paragraphs that need your judgment — the ambiguous
+ones.  Pre-classified paragraphs are included as read-only context (marked with
+"preclassified": true) to help you understand surrounding structure.
 
 Your job:
-- Classify EVERY content paragraph into its CSI semantic role
+- Classify EVERY ambiguous paragraph into its CSI semantic role
 - ONLY use roles from the available_roles list
 - If a paragraph's natural role is not in available_roles, use the closest parent role
 
-CRITICAL: You must classify ALL content paragraphs. Any paragraph you omit will remain
-unstyled in the output document. Do NOT be conservative — classify every paragraph that
-has a recognizable CSI role.
+CRITICAL: Every ambiguous paragraph_index you receive MUST appear exactly once in
+your output.  Any paragraph you omit will remain unstyled in the output document.
 
 Paragraphs to SKIP (do not include in classifications):
+- Paragraphs marked "preclassified": true (already handled)
 - Empty or blank paragraphs
 - Paragraphs containing section/page break markup (w:sectPr)
 - "END OF SECTION" lines
 - Boilerplate lines that survived filtering (e.g., spec headers/footers)
-
-Every other paragraph MUST receive a classification.
 
 CSI Hierarchy (for reference):
 - SectionID: Section number line (e.g., "SECTION 23 05 13")
@@ -60,14 +61,17 @@ Fallback rules when a role is not available:
 Rules:
 - Do NOT create new roles outside of available_roles
 - Do NOT reference formatting
-- Use context (surrounding paragraphs) to resolve ambiguity rather than omitting
+- Do NOT re-classify paragraphs marked as preclassified
+- Use context (surrounding paragraphs, including preclassified ones) to resolve ambiguity
 
-Return JSON only.
+Return strict JSON only — no markdown, no explanation.
 '''
 
 PHASE2_RUN_INSTRUCTION = r'''
 Task:
-Classify CSI roles for EVERY content paragraph using ONLY the roles listed in available_roles.
+Classify CSI roles for EVERY ambiguous paragraph using ONLY the roles listed in
+available_roles.  Paragraphs marked "preclassified": true are already handled —
+do NOT include them in your output.
 
 Output schema:
 {
@@ -78,12 +82,11 @@ Output schema:
 }
 
 IMPORTANT:
-- Your classifications array MUST contain an entry for every paragraph that has a CSI role
-- Do NOT omit content paragraphs — every heading, article, paragraph, and subparagraph must be classified
+- Your classifications array MUST contain an entry for every ambiguous paragraph
 - Every csi_role value MUST be one of the strings in available_roles
-- Only skip truly empty paragraphs, section breaks, and "END OF SECTION" lines
 - Do not invent roles that aren't in available_roles
 - When uncertain between two roles, prefer the more specific one (e.g., SUBPARAGRAPH over PARAGRAPH)
+- Return strict JSON only — no markdown code blocks, no explanation text
 '''
 
 
@@ -187,6 +190,37 @@ def strip_boilerplate_with_report(content: str) -> tuple:
     return cleaned, hits
 
 
+def detect_marker_class(text: str) -> Optional[str]:
+    """Detect obvious CSI marker patterns in paragraph text.
+
+    Returns a role name string if the text starts with a recognisable CSI
+    marker, or ``None`` if ambiguous.  This is intentionally conservative —
+    context-aware disambiguation happens in the preclassifier (P2-004).
+    """
+    t = text.strip()
+    if not t:
+        return None
+    # SECTION 23 05 13
+    if re.match(r'(?i)^\s*SECTION\s+\d{2}\s*\d{2}\s*\d{2}', t):
+        return "SectionID"
+    # PART 1 / PART 2 / PART 3
+    if re.match(r'(?i)^\s*PART\s+[123]\b', t):
+        return "PART"
+    # 1.01, 2.03  (article numbering — digit.two-digits at start)
+    if re.match(r'^\s*\d+\.\d{2}\b', t):
+        return "ARTICLE"
+    # A. B. C. (uppercase letter + dot + space)
+    if re.match(r'^\s*[A-Z]\.\s', t):
+        return "PARAGRAPH"
+    # 1. 2. 3. (digit + dot + space, NOT article pattern)
+    if re.match(r'^\s*\d+\.\s', t):
+        return "SUBPARAGRAPH"
+    # a. b. c. (lowercase letter + dot + space)
+    if re.match(r'^\s*[a-z]\.\s', t):
+        return "SUBSUBPARAGRAPH"
+    return None
+
+
 def build_phase2_slim_bundle(
     extract_dir: Path,
     discipline: str,
@@ -208,6 +242,7 @@ def build_phase2_slim_bundle(
     doc_text = doc_path.read_text(encoding="utf-8")
 
     paragraphs = []
+    skipped_paragraphs: List[Dict[str, Any]] = []
     filter_report = {
         "paragraphs_removed_entirely": [],
         "paragraphs_stripped": []
@@ -215,10 +250,12 @@ def build_phase2_slim_bundle(
 
     for idx, (_s, _e, p_xml) in enumerate(iter_paragraph_xml_blocks(doc_text)):
         if paragraph_contains_sectpr(p_xml):
+            skipped_paragraphs.append({"paragraph_index": idx, "reason": "sectPr"})
             continue
 
         raw_text = paragraph_text_from_block(p_xml)
         if not raw_text:
+            skipped_paragraphs.append({"paragraph_index": idx, "reason": "empty"})
             continue
 
         cleaned_text, tags = strip_boilerplate_with_report(raw_text)
@@ -230,6 +267,7 @@ def build_phase2_slim_bundle(
                     "tags": tags,
                     "original_text_preview": raw_text[:120]
                 })
+            skipped_paragraphs.append({"paragraph_index": idx, "reason": "boilerplate"})
             continue
 
         if tags:
@@ -239,13 +277,22 @@ def build_phase2_slim_bundle(
             })
 
         numpr = paragraph_numpr_from_block(p_xml)
+        pstyle = paragraph_pstyle_from_block(p_xml)
+        ppr_hints = paragraph_ppr_hints_from_block(p_xml)
+        marker = detect_marker_class(cleaned_text)
+        is_all_caps = cleaned_text == cleaned_text.upper() and any(c.isalpha() for c in cleaned_text)
 
-        paragraphs.append({
+        entry: Dict[str, Any] = {
             "paragraph_index": idx,
             "text": cleaned_text[:200],
             "numPr": numpr if (numpr.get("numId") or numpr.get("ilvl")) else None,
-            "contains_sectPr": False
-        })
+            "contains_sectPr": False,
+            "pStyle": pstyle,
+            "ppr_hints": ppr_hints if ppr_hints else None,
+            "marker_class": marker,
+            "is_all_caps": is_all_caps,
+        }
+        paragraphs.append(entry)
 
     # Default roles if none specified
     if available_roles is None:
@@ -265,6 +312,7 @@ def build_phase2_slim_bundle(
         },
         "available_roles": available_roles,
         "filter_report": filter_report,
+        "skipped_paragraphs": skipped_paragraphs,
         "paragraphs": paragraphs
     }
 

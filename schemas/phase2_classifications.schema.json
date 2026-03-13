@@ -1,0 +1,44 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "phase2_classifications.schema.v1.json",
+  "title": "Phase 2 Classification Output",
+  "description": "Schema for LLM classification results mapping paragraph indices to CSI roles.",
+  "type": "object",
+  "required": ["classifications"],
+  "properties": {
+    "classifications": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["paragraph_index", "csi_role"],
+        "properties": {
+          "paragraph_index": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "Zero-based paragraph index in the source document.xml"
+          },
+          "csi_role": {
+            "type": "string",
+            "enum": [
+              "SectionID",
+              "SectionTitle",
+              "PART",
+              "ARTICLE",
+              "PARAGRAPH",
+              "SUBPARAGRAPH",
+              "SUBSUBPARAGRAPH"
+            ],
+            "description": "CSI semantic role from the architect template registry"
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    "notes": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "Optional explanatory notes from the classifier"
+    }
+  },
+  "additionalProperties": false
+}

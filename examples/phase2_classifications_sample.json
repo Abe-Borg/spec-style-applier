@@ -1,6 +1,8 @@
 {
+  "_comment": "Illustrative sample Phase 2 classification output. Paragraph indices and roles are from a typical CSI MasterSpec fire protection section (21 13 00). This file is not used by the pipeline — it serves as documentation of the expected LLM output format.",
   "classifications": [
     { "paragraph_index": 0, "csi_role": "SectionID" },
+    { "paragraph_index": 1, "csi_role": "SectionTitle" },
     { "paragraph_index": 4, "csi_role": "PART" },
     { "paragraph_index": 5, "csi_role": "ARTICLE" },
     { "paragraph_index": 6, "csi_role": "PARAGRAPH" },
@@ -120,18 +122,15 @@
     { "paragraph_index": 127, "csi_role": "PARAGRAPH" },
     { "paragraph_index": 128, "csi_role": "ARTICLE" },
     { "paragraph_index": 129, "csi_role": "PARAGRAPH" },
-    { "paragraph_index": 130, "csi_role": "PARAGRAPH" },
-    { "paragraph_index": 131, "csi_role": "SectionID" }
+    { "paragraph_index": 130, "csi_role": "PARAGRAPH" }
   ],
   "notes": [
-    "Paragraph 0 contains both section number and title concatenated - classified as SectionID since SectionTitle is available as separate role",
-    "Paragraph 13 ('Adjust list below to suit Project') omitted - MasterSpec editing instruction that should have been filtered",
-    "Paragraph 26 ('Adjust list below to suit Project') omitted - MasterSpec editing instruction that should have been filtered", 
-    "Paragraph 40 ('Edit this Article...') omitted - MasterSpec editing instruction that should have been filtered",
+    "Paragraph 0: section number line (e.g. 'SECTION 21 13 00')",
+    "Paragraph 1: section title line (e.g. 'WET-PIPE FIRE-SUPPRESSION SPRINKLER SYSTEMS')",
+    "Paragraphs 13, 26, 40: MasterSpec editing instructions omitted (boilerplate)",
     "Paragraph 4 'GENERAL' classified as PART (Part 1 - General)",
     "Paragraph 37 'PRODUCTS' classified as PART (Part 2 - Products)",
     "Paragraph 95 'EXECUTION' classified as PART (Part 3 - Execution)",
-    "Short title-like paragraphs (e.g., 'Submittal Data', 'Underground Piping', 'Sprinkler Heads') classified as PARAGRAPH headings with their content as SUBPARAGRAPH items beneath them",
-    "Paragraph 131 'END OF SECTION 211300' classified as SectionID as it marks section boundary"
+    "Paragraph 131 'END OF SECTION 211300' filtered as boilerplate (not classified)"
   ]
 }

@@ -8,6 +8,7 @@ from core.style_import import (
     _extract_basedOn,
     _find_style_numpr_in_chain,
     _collect_style_deps_from_arch,
+    _replace_style_block_in_xml,
 )
 
 
@@ -489,3 +490,111 @@ class TestBuiltinStyleSkipping:
 
         result_xml = (word_dir / "styles.xml").read_text(encoding="utf-8")
         assert 'w:styleId="CSI_Article__ARCH"' in result_xml
+
+
+class TestReplaceStyleBlockInXml:
+    """_replace_style_block_in_xml replaces an existing style block."""
+
+    def test_replace_existing(self):
+        styles_xml = '''<w:styles>
+<w:style w:type="paragraph" w:styleId="Heading1">
+<w:name w:val="Heading 1"/>
+<w:rPr><w:sz w:val="24"/></w:rPr>
+</w:style>
+</w:styles>'''
+        new_block = '''<w:style w:type="paragraph" w:styleId="Heading1">
+<w:name w:val="Heading 1"/>
+<w:rPr><w:sz w:val="28"/></w:rPr>
+</w:style>'''
+        result = _replace_style_block_in_xml(styles_xml, "Heading1", new_block)
+        assert 'w:val="28"' in result
+        assert 'w:val="24"' not in result
+
+    def test_nonexistent_unchanged(self):
+        styles_xml = '<w:styles><w:style w:type="paragraph" w:styleId="X"><w:name w:val="X"/></w:style></w:styles>'
+        result = _replace_style_block_in_xml(styles_xml, "NoSuchStyle", "<w:style/>")
+        assert result == styles_xml
+
+
+class TestImportOverwrite:
+    """import_arch_styles_into_target with overwrite_existing=True."""
+
+    def test_overwrite_replaces_existing_style(self, tmp_path):
+        word_dir = tmp_path / "word"
+        word_dir.mkdir()
+
+        # Target has an existing style with old font size
+        target_xml = '''<?xml version="1.0" encoding="UTF-8"?>
+<w:styles xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+<w:style w:type="paragraph" w:styleId="CSI_Part">
+<w:name w:val="CSI Part"/>
+<w:rPr><w:sz w:val="20"/></w:rPr>
+</w:style>
+</w:styles>'''
+        (word_dir / "styles.xml").write_text(target_xml, encoding="utf-8")
+
+        # Architect has the same style with different font size
+        arch_xml = '''<?xml version="1.0" encoding="UTF-8"?>
+<w:styles xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+<w:docDefaults>
+<w:rPrDefault><w:rPr><w:sz w:val="22"/></w:rPr></w:rPrDefault>
+<w:pPrDefault><w:pPr/></w:pPrDefault>
+</w:docDefaults>
+<w:style w:type="paragraph" w:styleId="CSI_Part">
+<w:name w:val="CSI Part"/>
+<w:rPr><w:sz w:val="28"/></w:rPr>
+</w:style>
+</w:styles>'''
+
+        from core.style_import import import_arch_styles_into_target
+        log = []
+        import_arch_styles_into_target(
+            target_extract_dir=tmp_path,
+            arch_styles_xml=arch_xml,
+            needed_style_ids=["CSI_Part"],
+            log=log,
+            overwrite_existing=True,
+        )
+
+        result_xml = (word_dir / "styles.xml").read_text(encoding="utf-8")
+        assert 'w:val="28"' in result_xml
+        assert any("Overwriting" in l for l in log)
+
+    def test_conservative_mode_skips_existing(self, tmp_path):
+        word_dir = tmp_path / "word"
+        word_dir.mkdir()
+
+        target_xml = '''<?xml version="1.0" encoding="UTF-8"?>
+<w:styles xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+<w:style w:type="paragraph" w:styleId="CSI_Part">
+<w:name w:val="CSI Part"/>
+<w:rPr><w:sz w:val="20"/></w:rPr>
+</w:style>
+</w:styles>'''
+        (word_dir / "styles.xml").write_text(target_xml, encoding="utf-8")
+
+        arch_xml = '''<?xml version="1.0" encoding="UTF-8"?>
+<w:styles xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+<w:docDefaults>
+<w:rPrDefault><w:rPr/></w:rPrDefault>
+<w:pPrDefault><w:pPr/></w:pPrDefault>
+</w:docDefaults>
+<w:style w:type="paragraph" w:styleId="CSI_Part">
+<w:name w:val="CSI Part"/>
+<w:rPr><w:sz w:val="28"/></w:rPr>
+</w:style>
+</w:styles>'''
+
+        from core.style_import import import_arch_styles_into_target
+        log = []
+        import_arch_styles_into_target(
+            target_extract_dir=tmp_path,
+            arch_styles_xml=arch_xml,
+            needed_style_ids=["CSI_Part"],
+            log=log,
+            overwrite_existing=False,
+        )
+
+        result_xml = (word_dir / "styles.xml").read_text(encoding="utf-8")
+        # Should still have old value
+        assert 'w:val="20"' in result_xml

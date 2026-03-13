@@ -11,20 +11,64 @@ preserving list number formatting (fonts, indents, prefixes).
 
 import re
 import json
-import random
+import hashlib
 from pathlib import Path
 from typing import Dict, List, Tuple, Optional, Any
 from copy import deepcopy
 
 
-def _generate_unique_nsid() -> str:
-    """Generate a unique nsid (8 hex chars) for abstractNum."""
-    return f"{random.randint(0, 0xFFFFFFFF):08X}"
+def _generate_deterministic_nsid(style_id: str, old_abstract_id: int, seed: int = 0) -> str:
+    """Generate a deterministic nsid (8 hex chars) from style context.
+
+    Uses SHA-256 hashing for reproducibility across runs.
+    """
+    data = f"{style_id}:{old_abstract_id}:{seed}".encode()
+    return hashlib.sha256(data).hexdigest()[:8].upper()
 
 
-def _generate_unique_durable_id() -> str:
-    """Generate a unique durableId for num."""
-    return str(random.randint(1, 2147483647))
+def _generate_deterministic_durable_id(style_id: str, old_num_id: int, seed: int = 0) -> str:
+    """Generate a deterministic durableId from style context.
+
+    Returns a positive integer string derived from SHA-256 hash.
+    """
+    data = f"durable:{style_id}:{old_num_id}:{seed}".encode()
+    h = int(hashlib.sha256(data).hexdigest()[:8], 16)
+    # Ensure positive and within Word's int32 range
+    return str((h % 2147483646) + 1)
+
+
+def _normalize_abstract_num_for_comparison(abstract_xml: str) -> str:
+    """Strip nsid, durableId, and abstractNumId from an abstractNum for content comparison.
+
+    Two abstractNum blocks are considered equivalent if they define the same
+    levels with the same formatting, regardless of IDs.
+    """
+    result = abstract_xml
+    result = re.sub(r'<w:nsid\s+w:val="[^"]*"/>', '', result)
+    result = re.sub(r'w:abstractNumId="[^"]*"', '', result)
+    result = re.sub(r'w16cid:durableId="[^"]*"', '', result)
+    # Collapse whitespace for comparison
+    result = re.sub(r'\s+', ' ', result).strip()
+    return result
+
+
+def _find_equivalent_abstract_num(
+    target_numbering_xml: str,
+    arch_abstract_xml: str,
+) -> Optional[int]:
+    """Check if an equivalent abstractNum already exists in target.
+
+    Returns the target abstractNumId if found, None otherwise.
+    """
+    normalized_arch = _normalize_abstract_num_for_comparison(arch_abstract_xml)
+
+    for m in re.finditer(r'<w:abstractNum\b[\s\S]*?</w:abstractNum>', target_numbering_xml):
+        target_block = m.group(0)
+        if _normalize_abstract_num_for_comparison(target_block) == normalized_arch:
+            id_match = re.search(r'w:abstractNumId="(\d+)"', target_block)
+            if id_match:
+                return int(id_match.group(1))
+    return None
 
 
 def find_max_ids_in_numbering(numbering_xml: str) -> Tuple[int, int]:
@@ -148,22 +192,33 @@ def build_numbering_import_plan(
     nums_to_import = []
     
     # Assign new IDs to abstractNums (all validated to exist above)
+    # First check for equivalent abstractNums already in target (dedup)
     next_abstract_id = max_abstract_id + 1
     for old_abstract_id in sorted(needed_abstract_ids):
+        arch_xml = abstract_nums[old_abstract_id]["xml"]
+
+        # Check if an equivalent abstractNum already exists in target
+        existing_id = _find_equivalent_abstract_num(target_numbering_xml, arch_xml)
+        if existing_id is not None:
+            # Reuse existing target abstractNum instead of duplicating
+            abstract_num_id_remap[old_abstract_id] = existing_id
+            continue
+
         new_abstract_id = next_abstract_id
         abstract_num_id_remap[old_abstract_id] = new_abstract_id
 
         # Get XML and remap the abstractNumId
-        xml = abstract_nums[old_abstract_id]["xml"]
+        xml = arch_xml
         xml = re.sub(
             r'w:abstractNumId="' + str(old_abstract_id) + '"',
             f'w:abstractNumId="{new_abstract_id}"',
             xml
         )
-        # Generate new nsid to avoid conflicts
+        # Generate deterministic nsid to avoid conflicts
+        nsid = _generate_deterministic_nsid("abstractNum", old_abstract_id)
         xml = re.sub(
             r'<w:nsid\s+w:val="[^"]+"/>',
-            f'<w:nsid w:val="{_generate_unique_nsid()}"/>',
+            f'<w:nsid w:val="{nsid}"/>',
             xml
         )
 
@@ -196,10 +251,11 @@ def build_numbering_import_plan(
             f'<w:abstractNumId w:val="{new_abstract_id}"',
             xml
         )
-        # Generate new durableId
+        # Generate deterministic durableId
+        durable_id = _generate_deterministic_durable_id("num", old_num_id)
         xml = re.sub(
             r'w16cid:durableId="[^"]*"',
-            f'w16cid:durableId="{_generate_unique_durable_id()}"',
+            f'w16cid:durableId="{durable_id}"',
             xml
         )
 

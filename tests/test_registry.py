@@ -226,3 +226,52 @@ class TestEdgeCases:
         xml = build_arch_styles_xml_from_registry(reg)
         assert '<w:uiPriority w:val="99"/>' in xml
         ET.fromstring(xml)
+
+
+# ── P2-011: raw_styles_xml support ────────────────────────────────────────
+
+
+class TestRawStylesXml:
+    """Test that raw_styles_xml is used when available, with synthetic fallback."""
+
+    _RAW_STYLES = (
+        '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+        '<w:styles xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">'
+        '<w:style w:type="paragraph" w:styleId="RawOnly">'
+        '<w:name w:val="Raw Only"/>'
+        '</w:style>'
+        '</w:styles>'
+    )
+
+    def test_raw_path_used_when_available(self):
+        reg = {"styles": {"raw_styles_xml": self._RAW_STYLES, "style_defs": []}}
+        xml = build_arch_styles_xml_from_registry(reg)
+        assert xml == self._RAW_STYLES
+        assert "RawOnly" in xml
+
+    def test_synthetic_fallback_when_no_raw(self):
+        reg = _make_registry(_sd("Synth1"))
+        xml = build_arch_styles_xml_from_registry(reg)
+        assert "Synth1" in xml
+        # Should not be the raw XML
+        assert "RawOnly" not in xml
+        ET.fromstring(xml)
+
+    def test_raw_path_validates_wellformedness(self):
+        reg = {"styles": {"raw_styles_xml": "<broken><"}}
+        with pytest.raises(ValueError, match="raw_styles_xml.*well-formedness"):
+            build_arch_styles_xml_from_registry(reg)
+
+    def test_empty_raw_falls_through_to_synthetic(self):
+        reg = _make_registry(_sd("FallbackStyle"))
+        reg["styles"]["raw_styles_xml"] = ""
+        xml = build_arch_styles_xml_from_registry(reg)
+        assert "FallbackStyle" in xml
+        ET.fromstring(xml)
+
+    def test_none_raw_falls_through_to_synthetic(self):
+        reg = _make_registry(_sd("FallbackStyle2"))
+        reg["styles"]["raw_styles_xml"] = None
+        xml = build_arch_styles_xml_from_registry(reg)
+        assert "FallbackStyle2" in xml
+        ET.fromstring(xml)

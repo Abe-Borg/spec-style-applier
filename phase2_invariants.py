@@ -50,6 +50,7 @@ def verify_phase2_invariants(
     src_docx: Path,
     new_document_xml: bytes,
     new_docx: Path | None = None,
+    sync_mode: str = "body_only",
 ) -> None:
     """
     Verify Phase 2 invariants:
@@ -60,17 +61,18 @@ def verify_phase2_invariants(
     The font exception allows us to strip hardcoded fonts from MasterSpec docs
     so that style-level fonts take effect.
     """
-    # 1) sectPr unchanged
+    # 1) sectPr unchanged (body_only mode only)
     before_doc = _read_docx_part(src_docx, "word/document.xml").decode("utf-8", errors="strict")
     after_doc = new_document_xml.decode("utf-8", errors="strict")
 
-    if _extract_all_sectpr_blocks(before_doc) != _extract_all_sectpr_blocks(after_doc):
-        raise RuntimeError("INVARIANT FAIL: sectPr changed")
+    if sync_mode == "body_only":
+        if _extract_all_sectpr_blocks(before_doc) != _extract_all_sectpr_blocks(after_doc):
+            raise RuntimeError("INVARIANT FAIL: sectPr changed")
 
-    # 2) headers/footers unchanged
+    # 2) headers/footers unchanged (body_only mode only)
     # NOTE: This check requires the *final* output docx. If you pass new_docx,
     # we will byte-compare all header/footer parts.
-    if new_docx is not None:
+    if new_docx is not None and sync_mode == "body_only":
         with zipfile.ZipFile(src_docx, "r") as z_before, zipfile.ZipFile(new_docx, "r") as z_after:
             before_names = [n for n in z_before.namelist() if (n.startswith("word/header") or n.startswith("word/footer")) and n.endswith(".xml")]
             after_names = [n for n in z_after.namelist() if (n.startswith("word/header") or n.startswith("word/footer")) and n.endswith(".xml")]

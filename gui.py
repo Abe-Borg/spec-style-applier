@@ -99,6 +99,16 @@ class Phase2GUI:
                                   state="readonly", width=20)
         disc_combo.pack(side=tk.LEFT)
 
+        # Sync mode
+        row5 = ttk.Frame(input_frame)
+        row5.pack(fill=tk.X, pady=2)
+        ttk.Label(row5, text="Sync Mode:", width=22, anchor="w").pack(side=tk.LEFT)
+        self.sync_mode_var = tk.StringVar(value="body_only")
+        sync_combo = ttk.Combobox(row5, textvariable=self.sync_mode_var,
+                                  values=["body_only", "template_sync"],
+                                  state="readonly", width=20)
+        sync_combo.pack(side=tk.LEFT)
+
         # ── Action Section ───────────────────────────────────────────────
         action_frame = ttk.Frame(main)
         action_frame.pack(fill=tk.X, pady=(0, 8))
@@ -250,6 +260,7 @@ class Phase2GUI:
         arch_path = Path(self.arch_var.get())
         api_key = self.api_key_var.get()
         discipline = self.discipline_var.get()
+        sync_mode = self.sync_mode_var.get()
 
         log: List[str] = []
 
@@ -271,12 +282,19 @@ class Phase2GUI:
         bundle = build_phase2_slim_bundle(extract_dir, discipline, available_roles=available_roles)
         self._log(f"  Bundle: {len(bundle.get('paragraphs', []))} paragraphs")
 
-        # Classify
+        # Deterministic pre-classification
+        from core.preclassifier import preclassify_paragraphs
+        preclassified, ambiguous = preclassify_paragraphs(bundle, available_roles)
+        self._log(f"  Pre-classified: {len(preclassified)} paragraphs, "
+                  f"ambiguous: {len(ambiguous)}")
+
+        # Classify ambiguous via LLM
         self._log(f"  Classifying with LLM...")
         classifications = classify_target_document(
             slim_bundle=bundle,
             available_roles=available_roles,
             api_key=api_key,
+            preclassified=preclassified,
         )
 
         # Save classifications
@@ -302,7 +320,8 @@ class Phase2GUI:
                 f"Preflight validation failed ({len(preflight_errors)} error(s)):\n{error_report}"
             )
 
-        apply_environment_to_target(target_extract_dir=extract_dir, registry=env_registry, log=log)
+        apply_environment_to_target(target_extract_dir=extract_dir, registry=env_registry, log=log,
+                                    sync_mode=sync_mode)
         self._log("  Applied environment")
 
         # Build synthetic styles.xml from registry (no disk dependency on arch extracted folder)
@@ -336,7 +355,8 @@ class Phase2GUI:
             arch_styles_xml=arch_styles_xml,
             needed_style_ids=needed_style_ids,
             log=log,
-            style_numid_remap=style_numid_remap
+            style_numid_remap=style_numid_remap,
+            overwrite_existing=(sync_mode == "template_sync"),
         )
         self._log(f"  Imported {len(needed_style_ids)} styles")
 
@@ -348,7 +368,7 @@ class Phase2GUI:
             arch_style_registry=arch_registry,
             log=log
         )
-        verify_stability(extract_dir, snap)
+        verify_stability(extract_dir, snap, sync_mode=sync_mode)
         self._log("  Applied classifications, stability verified")
 
         # Patch output
@@ -368,7 +388,8 @@ class Phase2GUI:
             if local_path.exists():
                 replacements[rel_path] = local_path.read_bytes()
 
-        patch_docx(src_docx=docx_path, out_docx=output_docx_path, replacements=replacements)
+        patch_docx(src_docx=docx_path, out_docx=output_docx_path, replacements=replacements,
+                   sync_mode=sync_mode)
 
         # Coverage
         total = len(bundle.get("paragraphs", []))

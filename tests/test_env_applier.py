@@ -1,9 +1,13 @@
-"""Tests for arch_env_applier.py — settings and font table hardening."""
+"""Tests for arch_env_applier.py — settings, font table, and sync mode tests."""
 
 import pytest
 from pathlib import Path
 
-from arch_env_applier import apply_settings, apply_font_table
+from arch_env_applier import (
+    apply_settings, apply_font_table,
+    _apply_page_layout, _apply_headers_footers,
+    apply_environment_to_target,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -422,3 +426,126 @@ class TestApplyFontTableValidation:
         apply_font_table(extract, registry, log)
 
         assert not any("WARNING" in m and "malformed" in m for m in log)
+
+
+# ── P2-010: Template sync environment extension ──────────────────────────
+
+
+_W_NS = 'xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"'
+
+_DOC_XML_WITH_SECTPR = (
+    f'<w:document {_W_NS}><w:body>'
+    '<w:p><w:r><w:t>Hello</w:t></w:r></w:p>'
+    f'<w:sectPr {_W_NS}><w:pgSz w:w="12240" w:h="15840"/></w:sectPr>'
+    '</w:body></w:document>'
+)
+
+
+class TestApplyPageLayout:
+    def test_replaces_final_sectpr(self, tmp_path):
+        extract = tmp_path / "extracted"
+        word_dir = extract / "word"
+        word_dir.mkdir(parents=True)
+        (word_dir / "document.xml").write_text(_DOC_XML_WITH_SECTPR, encoding="utf-8")
+
+        new_sectpr = f'<w:sectPr {_W_NS}><w:pgSz w:w="11906" w:h="16838"/></w:sectPr>'
+        log = []
+        _apply_page_layout(extract, new_sectpr, log)
+
+        result = (word_dir / "document.xml").read_text(encoding="utf-8")
+        assert 'w:w="11906"' in result
+        assert 'w:w="12240"' not in result
+
+    def test_no_sectpr_warns(self, tmp_path):
+        extract = tmp_path / "extracted"
+        word_dir = extract / "word"
+        word_dir.mkdir(parents=True)
+        (word_dir / "document.xml").write_text(
+            f'<w:document {_W_NS}><w:body/></w:document>', encoding="utf-8"
+        )
+
+        log = []
+        _apply_page_layout(extract, "<w:sectPr/>", log)
+        assert any("No sectPr found" in m for m in log)
+
+
+class TestApplyHeadersFooters:
+    def test_writes_header_files(self, tmp_path):
+        extract = tmp_path / "extracted"
+        word_dir = extract / "word"
+        word_dir.mkdir(parents=True)
+
+        hf = {
+            "word/header1.xml": '<w:hdr xmlns:w="http://example.com"><w:p/></w:hdr>',
+            "word/footer1.xml": '<w:ftr xmlns:w="http://example.com"><w:p/></w:ftr>',
+        }
+        log = []
+        _apply_headers_footers(extract, hf, log)
+
+        assert (word_dir / "header1.xml").exists()
+        assert (word_dir / "footer1.xml").exists()
+        assert any("2 header/footer" in m for m in log)
+
+    def test_skips_non_header_paths(self, tmp_path):
+        extract = tmp_path / "extracted"
+        word_dir = extract / "word"
+        word_dir.mkdir(parents=True)
+
+        hf = {"word/styles.xml": "<data/>"}
+        log = []
+        _apply_headers_footers(extract, hf, log)
+        assert any("Skipping non-header/footer" in m for m in log)
+
+
+class TestTemplateSyncMode:
+    def test_body_only_skips_page_artifacts(self, tmp_path):
+        extract = tmp_path / "extracted"
+        word_dir = extract / "word"
+        word_dir.mkdir(parents=True)
+        (word_dir / "document.xml").write_text(_DOC_XML_WITH_SECTPR, encoding="utf-8")
+        (word_dir / "styles.xml").write_text(
+            f'<w:styles {_W_NS}></w:styles>', encoding="utf-8"
+        )
+
+        registry = {
+            "page_layout": '<w:sectPr><w:pgSz w:w="999"/></w:sectPr>',
+            "headers_footers": {"word/header1.xml": "<hdr/>"},
+        }
+        log = []
+        apply_environment_to_target(extract, registry, log, sync_mode="body_only",
+                                    apply_theme_flag=False, apply_settings_flag=False,
+                                    apply_fonts_flag=False, apply_doc_defaults_flag=False)
+
+        # sectPr should be unchanged
+        doc = (word_dir / "document.xml").read_text(encoding="utf-8")
+        assert 'w:w="12240"' in doc
+        # No header file should be written
+        assert not (word_dir / "header1.xml").exists()
+
+    def test_template_sync_applies_page_artifacts(self, tmp_path):
+        extract = tmp_path / "extracted"
+        word_dir = extract / "word"
+        word_dir.mkdir(parents=True)
+        (word_dir / "document.xml").write_text(_DOC_XML_WITH_SECTPR, encoding="utf-8")
+        (word_dir / "styles.xml").write_text(
+            f'<w:styles {_W_NS}></w:styles>', encoding="utf-8"
+        )
+
+        new_sectpr = f'<w:sectPr {_W_NS}><w:pgSz w:w="11906" w:h="16838"/></w:sectPr>'
+        registry = {
+            "page_layout": new_sectpr,
+            "headers_footers": {
+                "word/header1.xml": '<w:hdr xmlns:w="http://example.com"><w:p/></w:hdr>',
+            },
+        }
+        log = []
+        apply_environment_to_target(extract, registry, log, sync_mode="template_sync",
+                                    apply_theme_flag=False, apply_settings_flag=False,
+                                    apply_fonts_flag=False, apply_doc_defaults_flag=False)
+
+        # sectPr should be replaced
+        doc = (word_dir / "document.xml").read_text(encoding="utf-8")
+        assert 'w:w="11906"' in doc
+        assert 'w:w="12240"' not in doc
+        # Header file should be written
+        assert (word_dir / "header1.xml").exists()

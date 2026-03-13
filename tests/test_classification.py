@@ -1,7 +1,7 @@
-"""Tests for core.classification — boilerplate filtering, especially END OF SECTION."""
+"""Tests for core.classification — boilerplate filtering, marker detection, and bundle building."""
 
 import pytest
-from core.classification import strip_boilerplate_with_report
+from core.classification import strip_boilerplate_with_report, detect_marker_class
 
 
 class TestEndOfSectionFiltering:
@@ -87,3 +87,54 @@ class TestEndOfSectionEdgeCases:
         cleaned, tags = strip_boilerplate_with_report("")
         assert cleaned == ""
         assert tags == []
+
+
+# ---------------------------------------------------------------------------
+# P2-003: Marker class detection
+# ---------------------------------------------------------------------------
+
+class TestDetectMarkerClass:
+    """detect_marker_class assigns obvious CSI markers."""
+
+    def test_section_id(self):
+        assert detect_marker_class("SECTION 23 05 13") == "SectionID"
+
+    def test_section_id_lowercase(self):
+        assert detect_marker_class("section 23 05 13") == "SectionID"
+
+    def test_part_1(self):
+        assert detect_marker_class("PART 1 GENERAL") == "PART"
+
+    def test_part_2(self):
+        assert detect_marker_class("PART 2 PRODUCTS") == "PART"
+
+    def test_part_3(self):
+        assert detect_marker_class("PART 3 EXECUTION") == "PART"
+
+    def test_article(self):
+        assert detect_marker_class("1.01 SUMMARY") == "ARTICLE"
+
+    def test_article_2(self):
+        assert detect_marker_class("2.03 VALVES") == "ARTICLE"
+
+    def test_paragraph(self):
+        assert detect_marker_class("A. Provide valves as specified.") == "PARAGRAPH"
+
+    def test_paragraph_b(self):
+        assert detect_marker_class("B. Submit shop drawings.") == "PARAGRAPH"
+
+    def test_subparagraph(self):
+        assert detect_marker_class("1. Type A valve") == "SUBPARAGRAPH"
+
+    def test_subsubparagraph(self):
+        assert detect_marker_class("a. 150 psi minimum") == "SUBSUBPARAGRAPH"
+
+    def test_plain_text_none(self):
+        assert detect_marker_class("Provide valves as specified.") is None
+
+    def test_empty_none(self):
+        assert detect_marker_class("") is None
+
+    def test_all_caps_title_none(self):
+        """All-caps text without a CSI marker is not classified."""
+        assert detect_marker_class("COMMON MOTOR REQUIREMENTS") is None

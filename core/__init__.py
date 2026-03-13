@@ -39,6 +39,7 @@ from core.classification import (
     PHASE2_RUN_INSTRUCTION,
     BOILERPLATE_PATTERNS,
     strip_boilerplate_with_report,
+    detect_marker_class,
     build_phase2_slim_bundle,
     apply_phase2_classifications,
 )

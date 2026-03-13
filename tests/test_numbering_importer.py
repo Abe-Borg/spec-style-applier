@@ -9,6 +9,9 @@ from numbering_importer import (
     inject_numbering_into_xml,
     import_numbering,
     extract_used_num_ids_from_styles,
+    _generate_deterministic_nsid,
+    _generate_deterministic_durable_id,
+    _find_equivalent_abstract_num,
 )
 
 
@@ -352,8 +355,9 @@ class TestHappyPath:
         (word_dir / "numbering.xml").write_text(MINIMAL_TARGET_NUMBERING, encoding="utf-8")
 
         styles_xml = _make_arch_styles_xml([("CSILevel1", 2)])
+        # Use a unique rpr_xml so the arch abstractNum does NOT dedup with target
         registry = _make_registry(
-            abstract_nums=[_make_abstract_num(5)],
+            abstract_nums=[_make_abstract_num(5, rpr_xml='<w:rPr><w:b/></w:rPr>')],
             nums=[_make_num(2, 5)],
         )
 
@@ -397,3 +401,123 @@ class TestHappyPath:
         # Target has numId=1, so the new numId must be > 1
         new_num_id = remap["CSILevel1"]["new_numId"]
         assert new_num_id > 1
+
+
+# ── P2-012: Deterministic numbering + dedup ──────────────────────────────
+
+
+class TestDeterministicIds:
+    """Verify that ID generation is reproducible across runs."""
+
+    def test_nsid_is_deterministic(self):
+        a = _generate_deterministic_nsid("abstractNum", 5)
+        b = _generate_deterministic_nsid("abstractNum", 5)
+        assert a == b
+        assert len(a) == 8
+
+    def test_nsid_differs_for_different_ids(self):
+        a = _generate_deterministic_nsid("abstractNum", 5)
+        b = _generate_deterministic_nsid("abstractNum", 6)
+        assert a != b
+
+    def test_durable_id_is_deterministic(self):
+        a = _generate_deterministic_durable_id("num", 3)
+        b = _generate_deterministic_durable_id("num", 3)
+        assert a == b
+        assert int(a) > 0
+
+    def test_durable_id_differs_for_different_ids(self):
+        a = _generate_deterministic_durable_id("num", 3)
+        b = _generate_deterministic_durable_id("num", 4)
+        assert a != b
+
+    def test_repeated_import_produces_same_nsids(self):
+        """Full import plan produces identical nsids across runs."""
+        styles_xml = _make_arch_styles_xml([("S1", 1)])
+        target_xml = MINIMAL_TARGET_NUMBERING
+        # Use unique rpr_xml so dedup doesn't match the target's abstractNum
+        registry = _make_registry(
+            abstract_nums=[_make_abstract_num(5, rpr_xml='<w:rPr><w:i/></w:rPr>')],
+            nums=[_make_num(1, 5)],
+        )
+
+        plan1 = build_numbering_import_plan(registry, styles_xml, target_xml, ["S1"])
+        plan2 = build_numbering_import_plan(registry, styles_xml, target_xml, ["S1"])
+
+        nsid1 = re.search(r'w:val="([^"]+)"',
+                          re.search(r'<w:nsid[^/]*/>', plan1["abstract_nums_to_import"][0]["xml"]).group(0)).group(1)
+        nsid2 = re.search(r'w:val="([^"]+)"',
+                          re.search(r'<w:nsid[^/]*/>', plan2["abstract_nums_to_import"][0]["xml"]).group(0)).group(1)
+        assert nsid1 == nsid2
+
+
+class TestDeduplication:
+    """Verify that equivalent abstractNums are reused instead of duplicated."""
+
+    def test_find_equivalent_matches(self):
+        abstract_xml = (
+            '<w:abstractNum w:abstractNumId="0">'
+            '<w:nsid w:val="AABBCCDD"/>'
+            '<w:lvl w:ilvl="0"><w:start w:val="1"/><w:numFmt w:val="decimal"/></w:lvl>'
+            '</w:abstractNum>'
+        )
+        target_xml = (
+            '<w:numbering>'
+            '<w:abstractNum w:abstractNumId="5">'
+            '<w:nsid w:val="11223344"/>'
+            '<w:lvl w:ilvl="0"><w:start w:val="1"/><w:numFmt w:val="decimal"/></w:lvl>'
+            '</w:abstractNum>'
+            '</w:numbering>'
+        )
+        result = _find_equivalent_abstract_num(target_xml, abstract_xml)
+        assert result == 5
+
+    def test_find_equivalent_no_match(self):
+        abstract_xml = (
+            '<w:abstractNum w:abstractNumId="0">'
+            '<w:nsid w:val="AABBCCDD"/>'
+            '<w:lvl w:ilvl="0"><w:start w:val="1"/><w:numFmt w:val="bullet"/></w:lvl>'
+            '</w:abstractNum>'
+        )
+        target_xml = (
+            '<w:numbering>'
+            '<w:abstractNum w:abstractNumId="5">'
+            '<w:nsid w:val="11223344"/>'
+            '<w:lvl w:ilvl="0"><w:start w:val="1"/><w:numFmt w:val="decimal"/></w:lvl>'
+            '</w:abstractNum>'
+            '</w:numbering>'
+        )
+        result = _find_equivalent_abstract_num(target_xml, abstract_xml)
+        assert result is None
+
+    def test_dedup_reuses_existing_abstract_num(self):
+        """When target already has the same abstractNum, reuse its ID."""
+        # Both arch and target have the same level definition
+        level_xml = '<w:lvl w:ilvl="0"><w:start w:val="1"/><w:numFmt w:val="decimal"/></w:lvl>'
+
+        arch_abstract_xml = (
+            f'<w:abstractNum w:abstractNumId="5">'
+            f'<w:nsid w:val="AAAA0000"/>{level_xml}</w:abstractNum>'
+        )
+
+        # Target has the same level definition but different IDs
+        target_xml = (
+            '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+            '<w:numbering xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">'
+            f'<w:abstractNum w:abstractNumId="99">'
+            f'<w:nsid w:val="BBBB1111"/>{level_xml}</w:abstractNum>'
+            '<w:num w:numId="1"><w:abstractNumId w:val="99"/></w:num>'
+            '</w:numbering>'
+        )
+
+        styles_xml = _make_arch_styles_xml([("S1", 1)])
+        registry = _make_registry(
+            abstract_nums=[{"abstractNumId": 5, "xml": arch_abstract_xml}],
+            nums=[_make_num(1, 5)],
+        )
+
+        plan = build_numbering_import_plan(registry, styles_xml, target_xml, ["S1"])
+        # Should reuse target's abstractNumId 99 instead of creating a new one
+        assert len(plan["abstract_nums_to_import"]) == 0
+        # The num should reference the existing abstract
+        assert plan["nums_to_import"][0]["new_abstract_id"] == 99

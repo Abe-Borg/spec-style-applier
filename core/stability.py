@@ -64,22 +64,23 @@ def snapshot_stability(extract_dir: Path) -> StabilitySnapshot:
     )
 
 
-def verify_stability(extract_dir: Path, snap: StabilitySnapshot) -> None:
-    current_hf = snapshot_headers_footers(extract_dir)
-    if current_hf != snap.header_footer_hashes:
-        changed = []
-        all_keys = set(current_hf.keys()) | set(snap.header_footer_hashes.keys())
-        for k in sorted(all_keys):
-            if current_hf.get(k) != snap.header_footer_hashes.get(k):
-                changed.append(k)
-        raise ValueError(f"Header/footer stability check FAILED. Changed: {changed}")
+def verify_stability(extract_dir: Path, snap: StabilitySnapshot, sync_mode: str = "body_only") -> None:
+    if sync_mode == "body_only":
+        current_hf = snapshot_headers_footers(extract_dir)
+        if current_hf != snap.header_footer_hashes:
+            changed = []
+            all_keys = set(current_hf.keys()) | set(snap.header_footer_hashes.keys())
+            for k in sorted(all_keys):
+                if current_hf.get(k) != snap.header_footer_hashes.get(k):
+                    changed.append(k)
+            raise ValueError(f"Header/footer stability check FAILED. Changed: {changed}")
 
-    doc_text = (extract_dir / "word" / "document.xml").read_text(encoding="utf-8")
-    current_sectpr = extract_sectpr_block(doc_text)
-    if sha256_text(current_sectpr) != snap.sectpr_hash:
-        raise ValueError("Section properties (w:sectPr) stability check FAILED.")
+        doc_text = (extract_dir / "word" / "document.xml").read_text(encoding="utf-8")
+        current_sectpr = extract_sectpr_block(doc_text)
+        if sha256_text(current_sectpr) != snap.sectpr_hash:
+            raise ValueError("Section properties (w:sectPr) stability check FAILED.")
 
-    # relationships must be stable too (header/footer binding lives here)
-    current_rels = snapshot_doc_rels_hash(extract_dir)
-    if current_rels != snap.doc_rels_hash:
-        raise ValueError("document.xml.rels stability check FAILED (can break header/footer).")
+        # relationships must be stable too (header/footer binding lives here)
+        current_rels = snapshot_doc_rels_hash(extract_dir)
+        if current_rels != snap.doc_rels_hash:
+            raise ValueError("document.xml.rels stability check FAILED (can break header/footer).")

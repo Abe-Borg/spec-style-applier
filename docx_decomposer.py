@@ -142,6 +142,13 @@ def main():
     )
     parser.add_argument("--api-key", default=None, help="Anthropic API key (default: ANTHROPIC_API_KEY env var)")
     parser.add_argument("--model", default="claude-opus-4-6", help="LLM model for classification")
+    parser.add_argument(
+        "--sync-mode",
+        choices=["body_only", "template_sync"],
+        default="body_only",
+        help="body_only (default): preserve target page artifacts. "
+             "template_sync: overwrite styles + allow page artifact sync."
+    )
 
     args = parser.parse_args()
 
@@ -244,13 +251,20 @@ def main():
         )
         print(f"Built slim bundle: {len(bundle.get('paragraphs', []))} paragraphs")
 
-        # Classify via LLM
+        # Deterministic pre-classification
+        from core.preclassifier import preclassify_paragraphs
+        preclassified, ambiguous = preclassify_paragraphs(bundle, available_roles)
+        print(f"Pre-classified: {len(preclassified)} paragraphs deterministically")
+        print(f"Ambiguous (for LLM): {len(ambiguous)} paragraphs")
+
+        # Classify ambiguous paragraphs via LLM
         print(f"Classifying with {args.model}...")
         classifications = classify_target_document(
             slim_bundle=bundle,
             available_roles=available_roles,
             api_key=api_key,
-            model=args.model
+            model=args.model,
+            preclassified=preclassified,
         )
 
         # Save classifications for auditability
@@ -315,7 +329,8 @@ def main():
         apply_environment_to_target(
             target_extract_dir=extract_dir,
             registry=env_registry,
-            log=log
+            log=log,
+            sync_mode=sync_mode,
         )
         print(f"Applied environment from: {arch_template_registry_path}")
 
@@ -354,12 +369,16 @@ def main():
         log.append("IMPORTING STYLE DEFINITIONS")
         log.append("=" * 60)
 
+        sync_mode = getattr(args, 'sync_mode', 'body_only')
+        overwrite_styles = (sync_mode == "template_sync")
+
         import_arch_styles_into_target(
             target_extract_dir=extract_dir,
             arch_styles_xml=arch_styles_xml,
             needed_style_ids=needed_style_ids,
             log=log,
-            style_numid_remap=style_numid_remap
+            style_numid_remap=style_numid_remap,
+            overwrite_existing=overwrite_styles,
         )
 
         if not needed_style_ids:
@@ -376,7 +395,7 @@ def main():
         )
 
         # Stability checks
-        verify_stability(extract_dir, snap)
+        verify_stability(extract_dir, snap, sync_mode=sync_mode)
 
         # Write formatted DOCX
         output_docx_path = Path(args.output_docx) if args.output_docx else (
@@ -404,6 +423,7 @@ def main():
             src_docx=input_docx_path,
             out_docx=output_docx_path,
             replacements=replacements,
+            sync_mode=sync_mode,
         )
 
         # Optional invariant verification
@@ -414,6 +434,7 @@ def main():
                 src_docx=input_docx_path,
                 new_document_xml=new_doc_xml_bytes,
                 new_docx=output_docx_path,
+                sync_mode=sync_mode,
             )
         except ModuleNotFoundError:
             pass

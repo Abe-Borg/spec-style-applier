@@ -25,11 +25,28 @@ def build_arch_styles_xml_from_registry(registry: Dict[str, Any]) -> str:
     This allows Phase 2 to operate entirely from the two JSON contract files
     without needing the architect's extracted word/styles.xml on disk.
 
+    If the registry contains ``styles.raw_styles_xml``, that raw XML is used
+    directly (after well-formedness validation) instead of synthesizing from
+    individual style_defs.  This enables future registries to carry a
+    pre-built styles.xml for maximum fidelity.
+
     The output is a well-formed XML string containing <w:docDefaults> and all
     <w:style> blocks. The existing regex-based functions (extract_style_block_raw,
     _extract_basedOn, _find_style_numpr_in_chain, etc.) work on this string
     identically to how they work on a real styles.xml file.
     """
+    # Fast path: use raw_styles_xml if provided
+    raw_xml = registry.get("styles", {}).get("raw_styles_xml")
+    if raw_xml and isinstance(raw_xml, str) and raw_xml.strip():
+        try:
+            _ET.fromstring(raw_xml.encode("utf-8"))
+        except _ET.ParseError as exc:
+            raise ValueError(
+                f"raw_styles_xml in registry failed XML well-formedness check: {exc}"
+            ) from exc
+        return raw_xml
+
+    # Synthetic rebuild from style_defs
     style_defs = registry.get("styles", {}).get("style_defs", [])
     doc_defaults = registry.get("doc_defaults", {})
 

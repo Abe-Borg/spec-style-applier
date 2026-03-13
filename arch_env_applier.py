@@ -606,6 +606,75 @@ def materialize_style_for_import(
 # Main environment application
 # ─────────────────────────────────────────────────────────────────────────────
 
+def _apply_page_layout(
+    target_extract_dir: Path,
+    page_layout_sectpr: str,
+    log: List[str],
+) -> None:
+    """
+    Replace the final sectPr in document.xml with the architect's sectPr.
+    Only called in template_sync mode.
+    """
+    doc_path = target_extract_dir / "word" / "document.xml"
+    if not doc_path.exists():
+        log.append("WARNING: No document.xml; cannot apply page layout")
+        return
+
+    doc_xml = doc_path.read_text(encoding="utf-8")
+
+    # Find the last sectPr in the body
+    sectpr_matches = list(re.finditer(r'<w:sectPr\b[\s\S]*?</w:sectPr>', doc_xml))
+    if not sectpr_matches:
+        log.append("WARNING: No sectPr found in document.xml; cannot apply page layout")
+        return
+
+    # Replace only the final (body-level) sectPr
+    last_match = sectpr_matches[-1]
+    doc_xml = doc_xml[:last_match.start()] + page_layout_sectpr.strip() + doc_xml[last_match.end():]
+
+    doc_path.write_text(doc_xml, encoding="utf-8")
+    log.append(f"  Replaced final sectPr with architect page layout ({len(page_layout_sectpr)} chars)")
+
+
+def _apply_headers_footers(
+    target_extract_dir: Path,
+    headers_footers: Dict[str, str],
+    log: List[str],
+) -> None:
+    """
+    Write architect header/footer XML files into the target extracted folder.
+    Only called in template_sync mode.
+
+    headers_footers: dict mapping internal paths (e.g. "word/header1.xml")
+                     to their XML content as strings.
+    """
+    word_dir = target_extract_dir / "word"
+    count = 0
+    for internal_path, xml_content in headers_footers.items():
+        if not (internal_path.startswith("word/header") or internal_path.startswith("word/footer")):
+            log.append(f"  WARNING: Skipping non-header/footer path: {internal_path}")
+            continue
+        if not internal_path.endswith(".xml"):
+            log.append(f"  WARNING: Skipping non-XML header/footer: {internal_path}")
+            continue
+
+        # internal_path is like "word/header1.xml" — strip "word/" prefix
+        rel = internal_path
+        if rel.startswith("word/"):
+            rel = rel[len("word/"):]
+
+        out_path = word_dir / rel
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+
+        if isinstance(xml_content, str):
+            out_path.write_text(xml_content, encoding="utf-8")
+        else:
+            out_path.write_bytes(xml_content)
+        count += 1
+
+    log.append(f"  Wrote {count} header/footer file(s) from registry")
+
+
 def apply_environment_to_target(
     target_extract_dir: Path,
     registry: Dict[str, Any],
@@ -614,21 +683,25 @@ def apply_environment_to_target(
     apply_settings_flag: bool = True,
     apply_doc_defaults_flag: bool = True,
     apply_fonts_flag: bool = True,
+    sync_mode: str = "body_only",
 ) -> None:
     """
     Apply the formatting environment from arch_template_registry to target.
-    
+
     Application order (deterministic):
     1. Theme (font/color definitions)
     2. Settings + compat (rendering behavior)
     3. Font table (font declarations)
     4. docDefaults in styles.xml (baseline formatting)
-    
+    5. Page layout / sectPr (template_sync mode only)
+    6. Headers/footers (template_sync mode only)
+
     Args:
         target_extract_dir: Extracted target document folder
         registry: Loaded arch_template_registry.json
         log: List to append log messages
         apply_*: Flags to selectively disable parts of application
+        sync_mode: "body_only" or "template_sync"
     """
     target_extract_dir = Path(target_extract_dir)
     
@@ -670,6 +743,26 @@ def apply_environment_to_target(
     else:
         log.append("\n[4/4] docDefaults application skipped")
     
+    # 5. Page layout / sectPr (template_sync only)
+    if sync_mode == "template_sync":
+        page_layout = registry.get("page_layout")
+        if page_layout and isinstance(page_layout, str) and page_layout.strip():
+            log.append("\n[5/6] Applying page layout (sectPr) from registry...")
+            _apply_page_layout(target_extract_dir, page_layout, log)
+        else:
+            log.append("\n[5/6] No page_layout in registry; skipping")
+
+        # 6. Headers/footers
+        headers_footers = registry.get("headers_footers")
+        if headers_footers and isinstance(headers_footers, dict):
+            log.append("\n[6/6] Applying headers/footers from registry...")
+            _apply_headers_footers(target_extract_dir, headers_footers, log)
+        else:
+            log.append("\n[6/6] No headers_footers in registry; skipping")
+    else:
+        log.append("\n[5/6] Page layout skipped (body_only mode)")
+        log.append("\n[6/6] Headers/footers skipped (body_only mode)")
+
     log.append("\n" + "=" * 60)
     log.append("END ENVIRONMENT APPLICATION")
     log.append("=" * 60)
