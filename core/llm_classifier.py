@@ -175,8 +175,10 @@ def classify_target_document(
             try:
                 with client.messages.stream(
                     model=model,
-                    max_tokens=16384,
-                    temperature=0,
+                    max_tokens=128000,
+                    temperature=1,
+                    thinking = {"type": "adaptive"},
+                    output_config = {"effort", "high"},
                     system=PHASE2_MASTER_PROMPT.strip(),
                     messages=[{"role": "user", "content": user_message}]
                 ) as stream:
