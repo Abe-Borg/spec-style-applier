@@ -29,7 +29,13 @@ def _minimal_template_registry():
                     "name": "CSI Article",
                 },
             ]
-        }
+        },
+        "page_layout": {
+            "default_section": {
+                "sectPr": "<w:sectPr><w:pgSz w:w=\"12240\" w:h=\"15840\"/><w:pgMar w:top=\"1800\" w:right=\"1080\" w:bottom=\"1440\" w:left=\"2160\" w:header=\"900\" w:footer=\"720\"/></w:sectPr>"
+            },
+            "section_chain": [],
+        },
     }
 
 
@@ -60,7 +66,10 @@ def test_wrong_section_types():
 # ---------------------------------------------------------------------------
 
 def test_style_defs_not_list():
-    tmpl = {"styles": {"style_defs": {"bad": True}}}
+    tmpl = {
+        "styles": {"style_defs": {"bad": True}},
+        "page_layout": {"default_section": {"sectPr": "<w:sectPr/>"}},
+    }
     errors = preflight_validate_registries({}, tmpl)
     assert any("style_defs must be a list" in e for e in errors)
 
@@ -76,7 +85,8 @@ def test_duplicate_style_ids():
                 {"style_id": "Dup", "type": "paragraph", "name": "A"},
                 {"style_id": "Dup", "type": "paragraph", "name": "B"},
             ]
-        }
+        },
+        "page_layout": {"default_section": {"sectPr": "<w:sectPr/>"}},
     }
     errors = preflight_validate_registries({}, tmpl)
     assert any("Duplicate style_id 'Dup'" in e for e in errors)
@@ -97,7 +107,8 @@ def test_malformed_xml_fragment():
                     "pPr": "<w:pPr><w:spacing w:after='200'/>",  # missing close
                 },
             ]
-        }
+        },
+        "page_layout": {"default_section": {"sectPr": "<w:sectPr/>"}},
     }
     errors = preflight_validate_registries({}, tmpl)
     assert any("w:pPr" in e and "malformed" in e for e in errors)
@@ -114,7 +125,8 @@ def test_self_closing_xml_fragment_is_valid():
                     "pPr": '<w:pPr w:val="x"/>',
                 },
             ]
-        }
+        },
+        "page_layout": {"default_section": {"sectPr": "<w:sectPr/>"}},
     }
     errors = preflight_validate_registries({}, tmpl)
     assert errors == []
@@ -151,7 +163,8 @@ def test_style_id_missing_from_template():
             "style_defs": [
                 {"style_id": "CSIPart", "type": "paragraph", "name": "Part"},
             ]
-        }
+        },
+        "page_layout": {"default_section": {"sectPr": "<w:sectPr/>"}},
     }
     errors = preflight_validate_registries(style_reg, tmpl)
     assert any("MissingStyle" in e and "ARTICLE" in e for e in errors)
@@ -186,7 +199,10 @@ def test_numbering_consistent():
 # ---------------------------------------------------------------------------
 
 def test_empty_style_defs_is_ok():
-    tmpl = {"styles": {"style_defs": []}}
+    tmpl = {
+        "styles": {"style_defs": []},
+        "page_layout": {"default_section": {"sectPr": "<w:sectPr/>"}},
+    }
     errors = preflight_validate_registries({}, tmpl)
     assert errors == []
 
@@ -195,10 +211,10 @@ def test_empty_style_defs_is_ok():
 # 10. Missing optional sections is valid
 # ---------------------------------------------------------------------------
 
-def test_missing_optional_sections_is_ok():
-    # Template with only styles — no theme, settings, fonts, numbering
-    errors = preflight_validate_registries({}, _minimal_template_registry())
-    assert errors == []
+def test_missing_page_layout_is_error():
+    tmpl = {"styles": _minimal_template_registry()["styles"]}
+    errors = preflight_validate_registries({}, tmpl)
+    assert any("missing page_layout" in e for e in errors)
 
 
 # ---------------------------------------------------------------------------
@@ -206,7 +222,10 @@ def test_missing_optional_sections_is_ok():
 # ---------------------------------------------------------------------------
 
 def test_style_def_not_dict():
-    tmpl = {"styles": {"style_defs": ["not-a-dict"]}}
+    tmpl = {
+        "styles": {"style_defs": ["not-a-dict"]},
+        "page_layout": {"default_section": {"sectPr": "<w:sectPr/>"}},
+    }
     errors = preflight_validate_registries({}, tmpl)
     assert any("must be a dict" in e for e in errors)
 

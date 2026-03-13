@@ -2,7 +2,7 @@ import re
 import hashlib
 import zipfile
 from pathlib import Path
-from typing import List
+from typing import List, Dict, Any
 
 def _sha256(b: bytes) -> str:
     return hashlib.sha256(b).hexdigest()
@@ -13,6 +13,26 @@ def _read_docx_part(docx: Path, internal_path: str) -> bytes:
 
 def _extract_all_sectpr_blocks(document_xml: str) -> List[str]:
     return re.findall(r"<w:sectPr\b[\s\S]*?</w:sectPr>", document_xml)
+
+
+def _normalize_sectpr_for_comparison(sectpr: str) -> str:
+    """Strip managed layout tags so only non-layout section semantics are compared."""
+    out = sectpr
+    for tag in ("pgSz", "pgMar", "cols", "docGrid"):
+        out = re.sub(rf'<w:{tag}\b[^>]*/>', '', out)
+        out = re.sub(rf'<w:{tag}\b[^>]*>[\s\S]*?</w:{tag}>', '', out, flags=re.S)
+    # reduce whitespace noise introduced by stripping
+    out = re.sub(r'>\s+<', '><', out)
+    return out.strip()
+
+
+def _extract_hf_relationship_subset(rels_xml: str) -> List[str]:
+    rels = re.findall(r'<Relationship\b[^>]*/>', rels_xml)
+    subset = [
+        rel for rel in rels
+        if 'relationships/header' in rel or 'relationships/footer' in rel
+    ]
+    return sorted(subset)
 
 
 def _normalize_rpr_for_comparison(rpr_block: str) -> str:
@@ -50,22 +70,31 @@ def verify_phase2_invariants(
     src_docx: Path,
     new_document_xml: bytes,
     new_docx: Path | None = None,
+    arch_template_registry: Dict[str, Any] | None = None,
 ) -> None:
     """
     Verify Phase 2 invariants:
-    1. sectPr unchanged (page layout preserved)
+    1. sectPr non-layout semantics unchanged (managed layout tags may change)
     2. Headers/footers unchanged (byte-identical)
+    3. Header/footer relationship subset unchanged
     3. Run properties unchanged EXCEPT for font-related elements (rFonts, sz, szCs)
     
     The font exception allows us to strip hardcoded fonts from MasterSpec docs
     so that style-level fonts take effect.
     """
-    # 1) sectPr unchanged
+    # 1) sectPr non-layout semantics unchanged
     before_doc = _read_docx_part(src_docx, "word/document.xml").decode("utf-8", errors="strict")
     after_doc = new_document_xml.decode("utf-8", errors="strict")
 
-    if _extract_all_sectpr_blocks(before_doc) != _extract_all_sectpr_blocks(after_doc):
-        raise RuntimeError("INVARIANT FAIL: sectPr changed")
+    before_sectprs = _extract_all_sectpr_blocks(before_doc)
+    after_sectprs = _extract_all_sectpr_blocks(after_doc)
+    if len(before_sectprs) != len(after_sectprs):
+        raise RuntimeError("INVARIANT FAIL: sectPr block count changed")
+
+    before_norm = [_normalize_sectpr_for_comparison(s) for s in before_sectprs]
+    after_norm = [_normalize_sectpr_for_comparison(s) for s in after_sectprs]
+    if before_norm != after_norm:
+        raise RuntimeError("INVARIANT FAIL: non-layout sectPr semantics changed")
 
     # 2) headers/footers unchanged
     # NOTE: This check requires the *final* output docx. If you pass new_docx,
@@ -81,6 +110,11 @@ def verify_phase2_invariants(
             for name in before_names:
                 if z_before.read(name) != z_after.read(name):
                     raise RuntimeError(f"INVARIANT FAIL: header/footer changed: {name}")
+
+            before_rels = z_before.read("word/_rels/document.xml.rels").decode("utf-8", errors="strict")
+            after_rels = z_after.read("word/_rels/document.xml.rels").decode("utf-8", errors="strict")
+            if _extract_hf_relationship_subset(before_rels) != _extract_hf_relationship_subset(after_rels):
+                raise RuntimeError("INVARIANT FAIL: header/footer relationship subset changed")
 
     # 3) no run-level formatting edits EXCEPT font-related (rFonts, sz, szCs)
     # We normalize rPr blocks by stripping font elements, then compare
