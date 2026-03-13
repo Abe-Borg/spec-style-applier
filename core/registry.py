@@ -267,6 +267,7 @@ _EXPECTED_TEMPLATE_SECTIONS = {
     "doc_defaults": dict,
     "styles": dict,
     "numbering": dict,
+    "page_layout": dict,
 }
 
 # Maps style_def property keys to the Word XML tag they should contain.
@@ -407,6 +408,56 @@ def _validate_top_level_xml_fragments(
                 errors.append(f"fonts.font_table_xml: {err}")
 
 
+def _validate_page_layout(
+    template_registry: Dict[str, Any], errors: List[str]
+) -> None:
+    """Check 8: page_layout contract required for Phase 2 layout sync."""
+    page_layout = template_registry.get("page_layout")
+    if not isinstance(page_layout, dict):
+        errors.append(
+            "arch_template_registry.json is missing page_layout, but Phase 2 page layout sync requires it."
+        )
+        return
+
+    default_section = page_layout.get("default_section")
+    if not isinstance(default_section, dict):
+        errors.append(
+            "arch_template_registry.json is missing page_layout.default_section, but Phase 2 page layout sync requires it."
+        )
+        return
+
+    sectpr = default_section.get("sectPr")
+    if not isinstance(sectpr, str) or not sectpr.strip():
+        errors.append(
+            "arch_template_registry.json is missing page_layout.default_section.sectPr, but Phase 2 page layout sync requires it."
+        )
+    else:
+        err = _check_xml_fragment(sectpr, "w:sectPr")
+        if err:
+            errors.append(f"page_layout.default_section.sectPr: {err}")
+
+    section_chain = page_layout.get("section_chain")
+    if section_chain is None:
+        return
+    if not isinstance(section_chain, list):
+        errors.append(f"page_layout.section_chain must be a list, got {type(section_chain).__name__}")
+        return
+
+    for idx, section in enumerate(section_chain):
+        if not isinstance(section, dict):
+            errors.append(f"page_layout.section_chain[{idx}] must be a dict")
+            continue
+        chain_sectpr = section.get("sectPr")
+        if not chain_sectpr:
+            continue
+        if not isinstance(chain_sectpr, str):
+            errors.append(f"page_layout.section_chain[{idx}].sectPr must be a string")
+            continue
+        err = _check_xml_fragment(chain_sectpr, "w:sectPr")
+        if err:
+            errors.append(f"page_layout.section_chain[{idx}].sectPr: {err}")
+
+
 def _validate_style_cross_ref(
     style_registry: Dict[str, str],
     known_style_ids: Set[str],
@@ -502,5 +553,6 @@ def preflight_validate_registries(
     _validate_top_level_xml_fragments(template_registry, errors)
     _validate_style_cross_ref(style_registry, known_style_ids, errors)
     _validate_numbering_consistency(template_registry, errors)
+    _validate_page_layout(template_registry, errors)
 
     return errors

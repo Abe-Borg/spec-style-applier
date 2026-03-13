@@ -16,7 +16,12 @@ Application order (deterministic):
 NOTE: This module does NOT touch:
 - numbering.xml (handled separately with explicit numPr materialization)
 - headers/footers (preserved from source)
-- sectPr (preserved from source)
+
+It DOES sync page layout in document.xml sectPr blocks for managed tags:
+- w:pgSz
+- w:pgMar
+- w:cols
+- w:docGrid
 
 Usage:
     from arch_env_applier import apply_environment_to_target
@@ -35,6 +40,15 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from core.registry import _check_xml_fragment
+
+
+MANAGED_LAYOUT_TAGS = ("pgSz", "pgMar", "cols", "docGrid")
+_CANONICAL_SECTPR_ORDER = [
+    "headerReference", "footerReference", "type", "pgSz", "pgMar", "paperSrc",
+    "pgBorders", "lnNumType", "pgNumType", "cols", "formProt", "vAlign",
+    "noEndnote", "titlePg", "textDirection", "bidi", "rtlGutter", "docGrid",
+    "printerSettings", "sectPrChange",
+]
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -462,6 +476,130 @@ def apply_font_table(
         log.append(f"WARNING: fontTable.xml may be malformed after mutation — {post_err}")
 
 
+def _extract_all_sectpr_blocks(document_xml: str) -> List[str]:
+    return re.findall(r"<w:sectPr\b[\s\S]*?</w:sectPr>", document_xml)
+
+
+def _extract_tag_block(xml: str, tag: str) -> Optional[str]:
+    self_closing = re.search(rf'(<w:{tag}\b[^>]*/>)', xml)
+    if self_closing:
+        return self_closing.group(1)
+    paired = re.search(rf'(<w:{tag}\b[^>]*>[\s\S]*?</w:{tag}>)', xml, flags=re.S)
+    return paired.group(1) if paired else None
+
+
+def _strip_tag_block(xml: str, tag: str) -> str:
+    xml = re.sub(rf'<w:{tag}\b[^>]*/>', '', xml)
+    return re.sub(rf'<w:{tag}\b[^>]*>[\s\S]*?</w:{tag}>', '', xml, flags=re.S)
+
+
+def _extract_layout_signature(sectpr: str) -> Dict[str, Optional[str]]:
+    pgmar = _extract_tag_block(sectpr, "pgMar") or ""
+    attrs = {}
+    for key in ("top", "right", "bottom", "left", "header", "footer"):
+        m = re.search(rf'w:{key}="([^"]+)"', pgmar)
+        attrs[key] = m.group(1) if m else None
+    return attrs
+
+
+def _child_tag_name(child_xml: str) -> Optional[str]:
+    m = re.match(r'<w:([A-Za-z0-9]+)\b', child_xml)
+    return m.group(1) if m else None
+
+
+def _extract_sectpr_children(inner: str) -> List[str]:
+    children = []
+    for m in re.finditer(r'<w:[A-Za-z0-9]+\b[^>]*(?:/>|>[\s\S]*?</w:[A-Za-z0-9]+>)', inner):
+        children.append(m.group(0))
+    return children
+
+
+def _merge_managed_layout_tags(target_sectpr: str, source_sectpr: str) -> str:
+    open_tag_m = re.match(r'(<w:sectPr\b[^>]*>)', target_sectpr)
+    close_tag = "</w:sectPr>"
+    if not open_tag_m or not target_sectpr.endswith(close_tag):
+        return target_sectpr
+
+    open_tag = open_tag_m.group(1)
+    inner = target_sectpr[len(open_tag):-len(close_tag)]
+
+    # Remove managed tags from target and prepare source replacements.
+    for tag in MANAGED_LAYOUT_TAGS:
+        inner = _strip_tag_block(inner, tag)
+    children = _extract_sectpr_children(inner)
+
+    managed_children = {
+        tag: _extract_tag_block(source_sectpr, tag)
+        for tag in MANAGED_LAYOUT_TAGS
+    }
+    index_by_tag = {tag: idx for idx, tag in enumerate(_CANONICAL_SECTPR_ORDER)}
+
+    for tag in MANAGED_LAYOUT_TAGS:
+        block = managed_children.get(tag)
+        if not block:
+            continue
+        target_order = index_by_tag[tag]
+
+        insert_at = len(children)
+        for i, child in enumerate(children):
+            child_tag = _child_tag_name(child)
+            if child_tag and index_by_tag.get(child_tag, 10_000) > target_order:
+                insert_at = i
+                break
+        children.insert(insert_at, block)
+
+    return f"{open_tag}{''.join(children)}{close_tag}"
+
+
+def _choose_layout_sources(target_count: int, page_layout: Dict[str, Any], log: List[str]) -> List[str]:
+    section_chain = page_layout.get("section_chain") or []
+    chain_sectprs = [s.get("sectPr") for s in section_chain if isinstance(s, dict) and s.get("sectPr")]
+    default_section = page_layout.get("default_section") if isinstance(page_layout.get("default_section"), dict) else {}
+    default_sectpr = default_section.get("sectPr")
+
+    if target_count == len(chain_sectprs) and target_count > 0:
+        return chain_sectprs
+    if default_sectpr:
+        if target_count != len(chain_sectprs) and len(chain_sectprs) > 0:
+            log.append(
+                f"WARNING: target has {target_count} sectPr blocks but architect has {len(chain_sectprs)}; "
+                "applying architect default_section layout to final target section only"
+            )
+        return [""] * (target_count - 1) + [default_sectpr]
+    raise ValueError("Template registry missing page_layout.default_section.sectPr required for Phase 2 page layout sync")
+
+
+def apply_page_layout(target_extract_dir: Path, registry: Dict[str, Any], log: List[str]) -> None:
+    page_layout = registry.get("page_layout")
+    if not isinstance(page_layout, dict):
+        raise ValueError("Template registry missing page_layout required for Phase 2 page layout sync")
+
+    doc_path = target_extract_dir / "word" / "document.xml"
+    if not doc_path.exists():
+        log.append("WARNING: No word/document.xml found; skipping page layout sync")
+        return
+
+    doc_xml = doc_path.read_text(encoding="utf-8")
+    target_sectprs = _extract_all_sectpr_blocks(doc_xml)
+    if not target_sectprs:
+        log.append("No sectPr blocks found in target document.xml; skipping page layout sync")
+        return
+
+    sources = _choose_layout_sources(len(target_sectprs), page_layout, log)
+    updated_xml = doc_xml
+
+    for idx, (target_sectpr, source_sectpr) in enumerate(zip(target_sectprs, sources)):
+        if not source_sectpr:
+            continue
+        before_sig = _extract_layout_signature(target_sectpr)
+        merged = _merge_managed_layout_tags(target_sectpr, source_sectpr)
+        after_sig = _extract_layout_signature(merged)
+        updated_xml = updated_xml.replace(target_sectpr, merged, 1)
+        log.append(f"Patched sectPr[{idx}] layout signature: {before_sig} -> {after_sig}")
+
+    doc_path.write_text(updated_xml, encoding="utf-8")
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Style materialization helpers (for styles not already in target)
 # ─────────────────────────────────────────────────────────────────────────────
@@ -623,6 +761,7 @@ def apply_environment_to_target(
     2. Settings + compat (rendering behavior)
     3. Font table (font declarations)
     4. docDefaults in styles.xml (baseline formatting)
+    5. page layout managed tags in document.xml sectPr (pgSz/pgMar/cols/docGrid)
     
     Args:
         target_extract_dir: Extracted target document folder
@@ -638,28 +777,28 @@ def apply_environment_to_target(
     
     # 1. Theme
     if apply_theme_flag:
-        log.append("\n[1/4] Applying theme...")
+        log.append("\n[1/5] Applying theme...")
         apply_theme(target_extract_dir, registry, log)
     else:
-        log.append("\n[1/4] Theme application skipped")
+        log.append("\n[1/5] Theme application skipped")
     
     # 2. Settings/compat
     if apply_settings_flag:
-        log.append("\n[2/4] Applying settings/compat...")
+        log.append("\n[2/5] Applying settings/compat...")
         apply_settings(target_extract_dir, registry, log)
     else:
-        log.append("\n[2/4] Settings application skipped")
+        log.append("\n[2/5] Settings application skipped")
     
     # 3. Font table
     if apply_fonts_flag:
-        log.append("\n[3/4] Applying font table...")
+        log.append("\n[3/5] Applying font table...")
         apply_font_table(target_extract_dir, registry, log)
     else:
-        log.append("\n[3/4] Font table application skipped")
+        log.append("\n[3/5] Font table application skipped")
     
     # 4. docDefaults in styles.xml
     if apply_doc_defaults_flag:
-        log.append("\n[4/4] Applying docDefaults...")
+        log.append("\n[4/5] Applying docDefaults...")
         styles_path = target_extract_dir / "word" / "styles.xml"
         if styles_path.exists():
             styles_xml = styles_path.read_text(encoding="utf-8")
@@ -668,7 +807,10 @@ def apply_environment_to_target(
         else:
             log.append("WARNING: No styles.xml in target; cannot apply docDefaults")
     else:
-        log.append("\n[4/4] docDefaults application skipped")
+        log.append("\n[4/5] docDefaults application skipped")
+
+    log.append("\n[5/5] Applying page layout managed tags...")
+    apply_page_layout(target_extract_dir, registry, log)
     
     log.append("\n" + "=" * 60)
     log.append("END ENVIRONMENT APPLICATION")

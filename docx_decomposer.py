@@ -386,7 +386,8 @@ def main():
         if not needed_style_ids:
             log.append("No architect styles needed for this doc (no mapped roles used).")
 
-        # Snapshot invariants BEFORE we touch document.xml
+        # Snapshot invariants after environment baseline is established
+        # (including managed sectPr page-layout sync) and before classification writes.
         snap = snapshot_stability(extract_dir)
 
         apply_phase2_classifications(
@@ -435,6 +436,7 @@ def main():
                 src_docx=input_docx_path,
                 new_document_xml=new_doc_xml_bytes,
                 new_docx=output_docx_path,
+                arch_template_registry=env_registry,
             )
         except ModuleNotFoundError:
             pass
