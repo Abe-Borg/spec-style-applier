@@ -184,6 +184,12 @@ class Phase2GUI:
                 f"arch_style_registry.json not found in {arch_path}.\n"
                 "Make sure you selected the correct architect template folder.")
             return False
+        if not (arch_path / "arch_template_registry.json").exists():
+            messagebox.showerror("Error",
+                f"arch_template_registry.json not found in {arch_path}.\n"
+                "Make sure you selected the correct architect template folder.")
+            return False
+
 
         return True
 
