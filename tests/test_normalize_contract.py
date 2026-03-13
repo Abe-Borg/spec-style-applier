@@ -12,7 +12,7 @@ class TestNormalizeParagraphForContract:
         p = '<w:p><w:pPr><w:pStyle w:val="Normal"/><w:jc w:val="center"/></w:pPr><w:r><w:t>Hi</w:t></w:r></w:p>'
         result = _normalize_paragraph_for_contract(p)
         assert "w:pStyle" not in result
-        assert 'w:jc w:val="center"' in result
+        assert 'w:jc w:val="center"' not in result
 
     def test_removes_empty_ppr_after_strip(self):
         """pPr that only contained a pStyle should vanish entirely."""
@@ -58,7 +58,7 @@ class TestNormalizeParagraphForContract:
         assert "<w:rPr" not in result  # empty rPr cleaned up too
 
     def test_mixed_ppr_preserves_remaining(self):
-        """pPr with pStyle + numPr + jc — only jc survives, pPr kept."""
+        """pPr with only allowed-change tags should normalize to no pPr."""
         p = (
             '<w:p><w:pPr>'
             '<w:pStyle w:val="Normal"/>'
@@ -69,8 +69,8 @@ class TestNormalizeParagraphForContract:
         result = _normalize_paragraph_for_contract(p)
         assert "w:pStyle" not in result
         assert "w:numPr" not in result
-        assert 'w:jc w:val="center"' in result
-        assert "<w:pPr>" in result  # pPr retained because jc remains
+        assert 'w:jc w:val="center"' not in result
+        assert "<w:pPr" not in result
 
     def test_both_empty_ppr_and_rpr_cleaned(self):
         """pPr with only pStyle + rPr with only fonts — both shells removed."""

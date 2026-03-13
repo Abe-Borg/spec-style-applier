@@ -8,9 +8,13 @@ with retry logic, chunking for large documents, and coverage reporting.
 import json
 import time
 import re
-from typing import Dict, Any, List
+from typing import Dict, Any, List, Set
 
-from core.classification import PHASE2_MASTER_PROMPT, PHASE2_RUN_INSTRUCTION
+from core.classification import (
+    PHASE2_MASTER_PROMPT,
+    PHASE2_RUN_INSTRUCTION,
+    coerce_to_final_classifications,
+)
 
 
 _CHARS_PER_TOKEN = 4
@@ -35,7 +39,7 @@ def _parse_classification_response(response_text: str) -> dict:
     return json.loads(text)
 
 
-def _validate_classifications(classifications: dict, available_roles: list) -> dict:
+def _validate_classifications(classifications: dict, available_roles: list, allowed_indices: Set[int]) -> dict:
     if not isinstance(classifications, dict):
         raise ValueError("LLM response is not a JSON object")
     items = classifications.get("classifications", [])
@@ -44,13 +48,26 @@ def _validate_classifications(classifications: dict, available_roles: list) -> d
 
     valid_roles = set(available_roles)
     validated = []
+    seen_indices = set()
     for item in items:
         if not isinstance(item, dict):
-            continue
+            raise ValueError("all classification entries must be objects")
         idx = item.get("paragraph_index")
         role = item.get("csi_role")
-        if isinstance(idx, int) and isinstance(role, str) and role in valid_roles:
-            validated.append({"paragraph_index": idx, "csi_role": role})
+        if not isinstance(idx, int):
+            raise ValueError(f"invalid paragraph_index: {idx!r}")
+        if idx in seen_indices:
+            raise ValueError(f"duplicate classification for paragraph_index={idx}")
+        if idx not in allowed_indices:
+            raise ValueError(f"classification index not allowed: {idx}")
+        if not isinstance(role, str) or role not in valid_roles:
+            raise ValueError(f"invalid csi_role for paragraph_index={idx}: {role!r}")
+        seen_indices.add(idx)
+        validated.append({"paragraph_index": idx, "csi_role": role})
+
+    missing = sorted(allowed_indices - seen_indices)
+    if missing:
+        raise ValueError(f"missing coverage for paragraph indices: {missing[:20]}")
 
     return {"classifications": validated, "notes": classifications.get("notes", [])}
 
@@ -121,24 +138,19 @@ def _merge_chunk_results(chunk_results: List[dict]) -> dict:
     }
 
 
-def _merge_deterministic_with_llm(slim_bundle: dict, llm_result: dict) -> dict:
-    merged: Dict[int, str] = {
-        item["paragraph_index"]: item["csi_role"]
-        for item in slim_bundle.get("deterministic_classifications", [])
-        if isinstance(item, dict) and isinstance(item.get("paragraph_index"), int) and isinstance(item.get("csi_role"), str)
-    }
-    for item in llm_result.get("classifications", []):
-        idx = item.get("paragraph_index")
-        role = item.get("csi_role")
-        if isinstance(idx, int) and isinstance(role, str):
-            merged[idx] = role
-    return {
-        "classifications": [{"paragraph_index": idx, "csi_role": role} for idx, role in sorted(merged.items())],
-        "notes": llm_result.get("notes", []),
-    }
-
-
 def classify_target_document(slim_bundle: dict, available_roles: list, api_key: str, model: str = "claude-opus-4-6") -> dict:
+    unresolved_paragraphs = slim_bundle.get("paragraphs", [])
+    if not unresolved_paragraphs:
+        deterministic_only = coerce_to_final_classifications(
+            slim_bundle,
+            {"classifications": [], "notes": ["LLM skipped: all paragraphs classified deterministically."]},
+            available_roles,
+        )
+        total_expected = len(deterministic_only.get("classifications", []))
+        print("LLM skipped: all paragraphs classified deterministically.")
+        print(f"Classification coverage: {total_expected}/{total_expected} (100.0%)")
+        return deterministic_only
+
     import anthropic
 
     client = anthropic.Anthropic(api_key=api_key)
@@ -165,7 +177,12 @@ def classify_target_document(slim_bundle: dict, available_roles: list, api_key: 
                 ) as stream:
                     response_text = stream.get_final_text()
                 parsed = _parse_classification_response(response_text)
-                chunk_results.append(_validate_classifications(parsed, available_roles))
+                allowed_indices = {
+                    p.get("paragraph_index")
+                    for p in chunk.get("paragraphs", [])
+                    if isinstance(p, dict) and isinstance(p.get("paragraph_index"), int)
+                }
+                chunk_results.append(_validate_classifications(parsed, available_roles, allowed_indices))
                 break
             except json.JSONDecodeError as e:
                 if attempt < max_retries:
@@ -182,7 +199,7 @@ def classify_target_document(slim_bundle: dict, available_roles: list, api_key: 
                     raise RuntimeError(f"LLM classification failed after {max_retries + 1} attempts: {e}")
 
     llm_only = chunk_results[0] if len(chunk_results) == 1 else _merge_chunk_results(chunk_results)
-    result = _merge_deterministic_with_llm(slim_bundle, llm_only)
+    result = coerce_to_final_classifications(slim_bundle, llm_only, available_roles)
 
     total_expected = len(slim_bundle.get("paragraphs", [])) + len(slim_bundle.get("deterministic_classifications", []))
     classified_count = len(result.get("classifications", []))
