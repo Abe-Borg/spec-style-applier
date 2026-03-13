@@ -41,6 +41,7 @@ from core.classification import (
     strip_boilerplate_with_report,
     build_phase2_slim_bundle,
     apply_phase2_classifications,
+    validate_phase2_classification_contract,
 )
 
 from core.registry import (

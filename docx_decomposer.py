@@ -25,6 +25,7 @@ from core.classification import (
     PHASE2_RUN_INSTRUCTION,
     build_phase2_slim_bundle,
     apply_phase2_classifications,
+    validate_phase2_classification_contract,
 )
 from core.stability import snapshot_stability, verify_stability
 from core.style_import import import_arch_styles_into_target
@@ -278,6 +279,22 @@ def main():
             arch_root = resolve_arch_extract_root(arch_input)
 
         classifications = json.loads(Path(args.phase2_classifications).read_text(encoding="utf-8"))
+
+        available_roles = load_available_roles_from_registry(arch_root) or sorted(arch_registry.keys())
+        validation_bundle = build_phase2_slim_bundle(
+            extract_dir,
+            args.phase2_discipline,
+            available_roles=available_roles,
+        )
+        merged_for_validation = {
+            "classifications": list(validation_bundle.get("deterministic_classifications", []))
+            + list(classifications.get("classifications", []))
+        }
+        validate_phase2_classification_contract(
+            validation_bundle,
+            merged_for_validation,
+            allowed_roles=available_roles,
+        )
 
         # Preflight report
         preflight_path = extract_dir / "phase2_preflight.json"
