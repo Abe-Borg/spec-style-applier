@@ -242,7 +242,6 @@ def strip_boilerplate_with_report(content: str) -> tuple:
 
 def build_phase2_slim_bundle(
     extract_dir: Path,
-    discipline: str,
     available_roles: Optional[List[str]] = None
 ) -> Dict[str, Any]:
     """
@@ -250,12 +249,11 @@ def build_phase2_slim_bundle(
 
     Args:
         extract_dir: Path to extracted DOCX folder
-        discipline: "mechanical" or "plumbing"
         available_roles: List of role names available in the architect template.
                         If None, all standard roles are allowed.
 
     Returns:
-        Dict containing document_meta, available_roles, filter_report, and paragraphs
+        Dict containing available_roles, filter_report, and paragraphs
     """
     doc_path = extract_dir / "word" / "document.xml"
     doc_text = doc_path.read_text(encoding="utf-8")
@@ -334,9 +332,6 @@ def build_phase2_slim_bundle(
     unresolved_paragraphs = [p for p in paragraphs if not p.get("in_table") and p["paragraph_index"] not in deterministic]
 
     return {
-        "document_meta": {
-            "discipline": discipline
-        },
         "available_roles": available_roles,
         "filter_report": filter_report,
         "paragraphs": unresolved_paragraphs,

@@ -56,7 +56,6 @@ python docx_decomposer.py target.docx \
 | `--classify` | Run full automated pipeline (requires API key) |
 | `--api-key KEY` | Anthropic API key (or set `ANTHROPIC_API_KEY` env var) |
 | `--model MODEL` | LLM model (default: `claude-sonnet-4-20250514`) |
-| `--phase2-discipline TYPE` | `mechanical` or `plumbing` (default: `mechanical`) |
 | `--output-docx PATH` | Output DOCX path |
 | `--use-extract-dir DIR` | Reuse existing extracted folder |
 | `--extract-dir DIR` | Specify extraction location |

@@ -42,7 +42,7 @@ def test_bundle_enrichment_and_table_filtering(tmp_path: Path):
         ),
     )
 
-    bundle = build_phase2_slim_bundle(extract_dir, "mechanical")
+    bundle = build_phase2_slim_bundle(extract_dir)
     assert bundle["deterministic_classifications"]
     assert len(bundle["paragraphs"]) == 0
 

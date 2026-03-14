@@ -92,7 +92,6 @@ python docx_decomposer.py <target.docx> \
 - `--phase2-build-bundle` — build slim bundle only (manual LLM step)
 - `--phase2-classifications JSON` — apply pre-computed classifications
 - `--phase2-arch-extract DIR` — architect extracted folder
-- `--phase2-discipline mechanical|plumbing` — discipline (default: mechanical)
 - `--output-docx PATH` — output DOCX path
 - `--use-extract-dir DIR` — reuse existing extracted folder
 - `--extract-dir DIR` — specify extraction location

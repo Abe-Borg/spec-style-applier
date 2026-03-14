@@ -89,16 +89,6 @@ class Phase2GUI:
         self.api_key_var = tk.StringVar(value=os.environ.get("ANTHROPIC_API_KEY", ""))
         ttk.Entry(row3, textvariable=self.api_key_var, show="*").pack(side=tk.LEFT, fill=tk.X, expand=True)
 
-        # Discipline
-        row4 = ttk.Frame(input_frame)
-        row4.pack(fill=tk.X, pady=2)
-        ttk.Label(row4, text="Discipline:", width=22, anchor="w").pack(side=tk.LEFT)
-        self.discipline_var = tk.StringVar(value="mechanical")
-        disc_combo = ttk.Combobox(row4, textvariable=self.discipline_var,
-                                  values=["mechanical", "plumbing", "fire protection"],
-                                  state="readonly", width=20)
-        disc_combo.pack(side=tk.LEFT)
-
         # ── Action Section ───────────────────────────────────────────────
         action_frame = ttk.Frame(main)
         action_frame.pack(fill=tk.X, pady=(0, 8))
@@ -251,8 +241,6 @@ class Phase2GUI:
 
         arch_path = Path(self.arch_var.get())
         api_key = self.api_key_var.get()
-        discipline = self.discipline_var.get()
-
         log: List[str] = []
 
         # Extract
@@ -270,7 +258,7 @@ class Phase2GUI:
 
         # Build slim bundle
         self._log("  Building slim bundle...")
-        bundle = build_phase2_slim_bundle(extract_dir, discipline, available_roles=available_roles)
+        bundle = build_phase2_slim_bundle(extract_dir, available_roles=available_roles)
         unresolved = len(bundle.get("paragraphs", []))
         deterministic = len(bundle.get("deterministic_classifications", []))
         self._log(f"  Bundle: {unresolved} unresolved + {deterministic} deterministic = {unresolved + deterministic} total")

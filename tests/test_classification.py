@@ -64,7 +64,7 @@ class TestEndOfSectionEdgeCases:
         assert cleaned == ""
         assert "end_of_section" in tags
 
-    def test_with_discipline_suffix(self):
+    def test_with_suffix(self):
         cleaned, tags = strip_boilerplate_with_report("END OF SECTION - MECHANICAL")
         assert cleaned == ""
         assert "end_of_section" in tags

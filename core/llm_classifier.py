@@ -74,7 +74,6 @@ def _validate_classifications(classifications: dict, available_roles: list, allo
 
 def _split_bundle_into_chunks(slim_bundle: dict, max_chars: int = _MAX_BUNDLE_CHARS) -> List[dict]:
     paragraphs = slim_bundle.get("paragraphs", [])
-    meta = slim_bundle.get("document_meta", {})
     roles = slim_bundle.get("available_roles", [])
     filter_report = slim_bundle.get("filter_report", {})
 
@@ -83,7 +82,6 @@ def _split_bundle_into_chunks(slim_bundle: dict, max_chars: int = _MAX_BUNDLE_CH
         return [slim_bundle]
 
     overhead = len(json.dumps({
-        "document_meta": meta,
         "available_roles": roles,
         "filter_report": {"paragraphs_removed_entirely": [], "paragraphs_stripped": []},
         "paragraphs": []
@@ -97,7 +95,6 @@ def _split_bundle_into_chunks(slim_bundle: dict, max_chars: int = _MAX_BUNDLE_CH
         end = min(start + paras_per_chunk, len(paragraphs))
         chunk_paras = paragraphs[start:end]
         chunk = {
-            "document_meta": meta,
             "available_roles": roles,
             "filter_report": {"paragraphs_removed_entirely": [], "paragraphs_stripped": []},
             "paragraphs": chunk_paras,
