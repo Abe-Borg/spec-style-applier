@@ -127,7 +127,6 @@ def main():
 
     # Phase 2
     parser.add_argument("--phase2-arch-extract", help="Architect extracted folder")
-    parser.add_argument("--phase2-discipline", default="mechanical", help="mechanical|plumbing")
     parser.add_argument("--phase2-classifications", help="Phase 2 LLM output JSON")
     parser.add_argument(
         "--phase2-build-bundle",
@@ -188,7 +187,6 @@ def main():
 
         bundle = build_phase2_slim_bundle(
             extract_dir,
-            args.phase2_discipline,
             available_roles=available_roles
         )
 
@@ -238,7 +236,6 @@ def main():
         # Build slim bundle
         bundle = build_phase2_slim_bundle(
             extract_dir,
-            args.phase2_discipline,
             available_roles=available_roles
         )
         unresolved = len(bundle.get("paragraphs", []))
@@ -288,7 +285,6 @@ def main():
         available_roles = load_available_roles_from_registry(arch_root) or sorted(arch_registry.keys())
         validation_bundle = build_phase2_slim_bundle(
             extract_dir,
-            args.phase2_discipline,
             available_roles=available_roles,
         )
         classifications = coerce_to_final_classifications(
