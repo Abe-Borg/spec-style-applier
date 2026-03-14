@@ -293,6 +293,18 @@ def build_phase2_slim_bundle(
                 "tags": tags
             })
 
+        # Skip END OF SECTION lines when no available role can receive them.
+        # These are deterministically identifiable but unstyled — sending them
+        # to the LLM (whose prompt says to skip them) causes coverage failures.
+        if _END_OF_SECTION_RX.match(cleaned_text):
+            if available_roles is None or "END_OF_SECTION" not in available_roles:
+                filter_report["paragraphs_removed_entirely"].append({
+                    "paragraph_index": idx,
+                    "tags": ["end_of_section_no_role"],
+                    "original_text_preview": raw_text[:120]
+                })
+                continue
+
         numpr = paragraph_numpr_from_block(p_xml)
         in_table = _in_any_range(start, table_ranges)
         pstyle = paragraph_pstyle_from_block(p_xml)
