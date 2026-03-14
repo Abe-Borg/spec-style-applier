@@ -19,6 +19,139 @@ import tkinter as tk
 from tkinter import ttk, filedialog, messagebox, scrolledtext
 
 
+HOW_IT_WORKS_TEXT = """# How It Works
+
+## The Problem It Solves
+
+When a project's architect provides a specification template, that template defines a specific visual style for every level of the CSI spec hierarchy — section headers, part headings, article numbers, paragraphs, subparagraphs, and so on. Each level has its own font, size, spacing, and indentation.
+
+MEP (mechanical, plumbing, fire protection) specifications are written separately, usually from an in-house master spec or a purchased library like MasterSpec. These documents have their own formatting — sometimes minimal, sometimes inconsistent — that rarely matches what the architect specified.
+
+Manually reformatting a spec section to match an architect's template means selecting every heading, every article number, every paragraph line, and applying the correct Word paragraph style one by one. On a single spec section that might be manageable. Across a full set of MEP sections with dozens of CSI divisions, it becomes a significant hours-long task, and it's easy to miss paragraphs or apply the wrong style.
+
+This tool automates that reformatting process.
+
+---
+
+## What the Tool Does, Step by Step
+
+### Step 1 — Read the Architect's Template
+
+Before this tool can do anything with your spec, someone on the team needs to run **Phase 1** on the architect's Word template. Phase 1 reads that template and extracts all the paragraph style definitions — fonts, spacing, numbering, indentation — and saves them to two JSON files in a folder. That folder is what you point this tool at.
+
+You only need to run Phase 1 once per architect template. The extracted folder can be reused for every spec section on that project.
+
+### Step 2 — Open and Read Your Spec Document
+
+The tool opens your MEP spec `.docx` file and reads every paragraph. It does this at the raw XML level — the underlying structure that Word uses internally — rather than through Word itself. This lets it work in the background without opening Word.
+
+### Step 3 — Classify Every Paragraph
+
+This is the core step. The tool needs to know what *kind* of content each paragraph is before it can apply the right style. Is a given line a PART heading? An article number like `1.01`? A lettered paragraph like `A.`? A numbered subparagraph?
+
+The tool uses two methods:
+
+**Deterministic classification** handles the easy cases automatically. A line that starts with `PART 1`, `PART 2`, or `PART 3` is always a PART heading. A line matching the pattern `1.01`, `2.03`, etc. is always an article number. Lettered list items (`A.`, `B.`) and numbered items (`1.`, `2.`) are identified by their formatting patterns. These don't need AI — the patterns are unambiguous.
+
+**AI classification** handles everything else. Paragraphs that aren't deterministically identifiable — body content, section headers, ambiguous lines — are sent to an AI model (Claude) via the Anthropic API. The AI reads each paragraph in context and assigns it a CSI role from the list of roles available in the architect's template.
+
+This two-step approach means the AI only has to work on the paragraphs that actually need judgment. The deterministic ones never leave your machine.
+
+### Step 4 — Apply the Styles
+
+With every paragraph classified, the tool applies the matching Word paragraph style from the architect's template to each paragraph. A paragraph classified as `ARTICLE` gets the architect's Article style applied. A paragraph classified as `PARAGRAPH` gets the architect's Paragraph style. And so on.
+
+The tool also imports the architect's numbering definitions (the list formatting rules) and formatting environment (fonts, spacing defaults, theme) into the document, so the imported styles render exactly as they would in the architect's own template.
+
+### Step 5 — Output a Formatted Document
+
+The result is a new `.docx` file — your original spec with all formatting replaced by the architect's styles. The content of every paragraph is untouched. Only the styling changes. Headers, footers, and page layout from your original document are preserved.
+
+---
+
+## What the API Key Is For
+
+The AI classification step (Step 3) requires a call to Anthropic's API, which is a paid cloud service. The API key in the interface authenticates those calls. The key is never stored by this tool — it's only used during the active processing run.
+
+If your document's paragraphs can all be classified deterministically (which is rare for a full spec section), the API call is skipped entirely and no key is needed.
+
+---
+
+## Batch Mode
+
+Batch mode runs the same process on every `.docx` file in a folder, one at a time. This is useful when you have a full set of spec sections to reformat for a project. Each file is processed independently and gets its own formatted output.
+
+---
+
+## What This Tool Does Not Do
+
+- It does not change any spec content — no words, no requirements, no product references
+- It does not open Word
+- It does not modify your original file — it always creates a new output document
+- It does not create or design styles — it only applies styles that already exist in the architect's template
+- It does not format tables, embedded objects, or content inside text boxes
+"""
+
+
+HOW_TO_USE_TEXT = """# How to Use
+
+## Before You Start
+
+You need two things ready before running this tool:
+
+1. **The architect's extracted template folder** — a folder containing `arch_style_registry.json` and `arch_template_registry.json`. These are produced by running Phase 1 on the architect's Word template. Get this folder from whoever ran Phase 1 on your project, or run it yourself. You only need to do this once per architect template.
+
+2. **An Anthropic API key** — required for the AI classification step. Get this from your firm's Anthropic account or your own at [console.anthropic.com](https://console.anthropic.com). If your `ANTHROPIC_API_KEY` environment variable is already set on your machine, the field will be pre-filled.
+
+---
+
+## Single File — Step by Step
+
+**1. Select the target spec**
+Click **Browse...** next to *Target Spec (.docx)* and select the MEP spec section you want to reformat.
+
+**2. Select the architect template folder**
+Click **Browse...** next to *Architect Template Folder* and select the folder containing the two registry JSON files.
+
+**3. Enter your API key**
+Paste your Anthropic API key into the *Anthropic API Key* field. It will appear masked.
+
+**4. Set the discipline**
+Select *mechanical* or *plumbing* from the dropdown to match the spec you're formatting.
+
+**5. Click Run Phase 2**
+The progress bar will animate while the tool works. The log window shows live status. Classification typically takes 15–60 seconds depending on document length.
+
+**6. Open the output**
+When complete, click **Open Output DOCX** to open the formatted document directly. The output file is saved in the same folder as your input file with `_PHASE2_FORMATTED` appended to the name.
+
+If anything went wrong, click **Open Log** to see a detailed record of what the tool did and where it stopped.
+
+---
+
+## Batch Mode
+
+**1.** Select *Batch Mode (folder)* at the top of the Input section.
+
+**2.** Click **Browse...** and select a folder containing the `.docx` spec files you want to process.
+
+**3.** Fill in the architect template folder, API key, and discipline as above.
+
+**4.** Click **Run Phase 2**. The tool processes each file in sequence. The log shows per-file results and a summary at the end.
+
+Output files are placed in the selected output folder (defaults to the input folder), each named `<original_filename>_PHASE2_FORMATTED.docx`.
+
+---
+
+## Notes
+
+- Your **original file is never modified**. The tool always writes a new output document.
+- Run the tool again on the same file any time — it will overwrite the previous output.
+- If you see a preflight validation error, the architect's template folder may be from a different Phase 1 run than expected. Confirm you have the right folder for this project.
+- The API key field is masked and is not saved to disk by this tool.
+"""
+
+
 def _check_numbering_module_needed(arch_styles_xml: str, needed_style_ids: list) -> None:
     """Raise if styles need numbering but numbering_importer is unavailable."""
     import re
@@ -69,20 +202,38 @@ class Phase2GUI:
 
         header = tk.Frame(main, bg=self.colors["bg_dark"])
         header.pack(fill=tk.X, pady=(0, 14))
+
+        header_left = tk.Frame(header, bg=self.colors["bg_dark"])
+        header_left.pack(side=tk.LEFT, fill=tk.X, expand=True)
         tk.Label(
-            header,
+            header_left,
             text="PHASE 2 MEP STYLING ENGINE",
             bg=self.colors["bg_dark"],
             fg=self.colors["text_primary"],
             font=("Segoe UI", 20, "bold"),
         ).pack(anchor="w")
         tk.Label(
-            header,
+            header_left,
             text="Apply architect style language to target specs",
             bg=self.colors["bg_dark"],
             fg=self.colors["text_secondary"],
             font=("Segoe UI", 11),
         ).pack(anchor="w", pady=(2, 0))
+
+        header_right = tk.Frame(header, bg=self.colors["bg_dark"])
+        header_right.pack(side=tk.RIGHT, anchor="ne")
+        tk.Button(
+            header_right,
+            text="How It Works",
+            command=lambda: self._show_info_popup("How It Works", HOW_IT_WORKS_TEXT),
+            **self.secondary_btn_style,
+        ).pack(side=tk.LEFT, padx=(0, 8))
+        tk.Button(
+            header_right,
+            text="How to Use",
+            command=lambda: self._show_info_popup("How to Use", HOW_TO_USE_TEXT),
+            **self.secondary_btn_style,
+        ).pack(side=tk.LEFT)
 
         input_frame = tk.Frame(main, bg=self.colors["bg_card"], padx=16, pady=12)
         input_frame.pack(fill=tk.X, pady=(0, 12))
@@ -184,6 +335,26 @@ class Phase2GUI:
             font=("Consolas", 11),
         ).pack(side=tk.LEFT, fill=tk.X, expand=True, ipady=7)
 
+        # Output folder
+        row4 = tk.Frame(input_frame, bg=self.colors["bg_card"])
+        row4.pack(fill=tk.X, pady=2)
+        tk.Label(row4, text="Output Folder:", width=22, anchor="w",
+                 bg=self.colors["bg_card"], fg=self.colors["text_secondary"], font=("Segoe UI", 11)).pack(side=tk.LEFT)
+        self.output_dir_var = tk.StringVar()
+        tk.Entry(
+            row4,
+            textvariable=self.output_dir_var,
+            bg=self.colors["bg_input"],
+            fg=self.colors["text_primary"],
+            insertbackground=self.colors["text_primary"],
+            relief=tk.FLAT,
+            highlightthickness=1,
+            highlightbackground=self.colors["border"],
+            highlightcolor=self.colors["accent"],
+            font=("Consolas", 11),
+        ).pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(0, 6), ipady=7)
+        tk.Button(row4, text="Browse...", command=self._browse_output_dir, **self.secondary_btn_style).pack(side=tk.RIGHT)
+
         # ── Action Section ───────────────────────────────────────────────
         action_frame = tk.Frame(main, bg=self.colors["bg_dark"])
         action_frame.pack(fill=tk.X, pady=(0, 12))
@@ -276,6 +447,7 @@ class Phase2GUI:
         else:
             self.target_label.config(text="Target Spec (.docx):")
         self.target_var.set("")
+        self.output_dir_var.set("")
 
     def _browse_target(self):
         if self.batch_var.get():
@@ -287,11 +459,21 @@ class Phase2GUI:
             )
         if path:
             self.target_var.set(path)
+            if self.batch_var.get():
+                default_output = path
+            else:
+                default_output = str(Path(path).parent)
+            self.output_dir_var.set(default_output)
 
     def _browse_arch(self):
         path = filedialog.askdirectory(title="Select Architect Template Folder")
         if path:
             self.arch_var.set(path)
+
+    def _browse_output_dir(self):
+        path = filedialog.askdirectory(title="Select Output Folder")
+        if path:
+            self.output_dir_var.set(path)
 
     def _log(self, msg: str):
         self.root.after(0, self._append_log, msg)
@@ -311,6 +493,9 @@ class Phase2GUI:
             return False
         if not self.arch_var.get():
             messagebox.showerror("Error", "Please select an architect template folder.")
+            return False
+        if not self.output_dir_var.get():
+            messagebox.showerror("Error", "Please select an output folder.")
             return False
         arch_path = Path(self.arch_var.get())
         if not (arch_path / "arch_style_registry.json").exists():
@@ -495,7 +680,9 @@ class Phase2GUI:
         self._log("  Applied classifications, stability verified")
 
         # Patch output
-        output_docx_path = Path("output") / (docx_path.stem + "_PHASE2_FORMATTED.docx")
+        output_dir = Path(self.output_dir_var.get())
+        output_dir.mkdir(parents=True, exist_ok=True)
+        output_docx_path = output_dir / (docx_path.stem + "_PHASE2_FORMATTED.docx")
         replacements = {
             "word/document.xml": (extract_dir / "word" / "document.xml").read_bytes(),
             "word/styles.xml": (extract_dir / "word" / "styles.xml").read_bytes(),
@@ -561,6 +748,37 @@ class Phase2GUI:
             self._log(f"  {name}: {status}")
         self._log(f"\n  {ok_count}/{len(results)} files processed successfully")
         self._set_status(f"Batch done: {ok_count}/{len(results)} OK")
+
+    def _show_info_popup(self, title: str, content: str):
+        popup = tk.Toplevel(self.root)
+        popup.title(title)
+        popup.geometry("760x650")
+        popup.minsize(640, 480)
+        popup.configure(bg=self.colors["bg_card"])
+        popup.transient(self.root)
+
+        frame = tk.Frame(popup, bg=self.colors["bg_card"], padx=16, pady=16)
+        frame.pack(fill=tk.BOTH, expand=True)
+
+        text = scrolledtext.ScrolledText(
+            frame,
+            wrap=tk.WORD,
+            font=("Segoe UI", 10),
+            bg=self.colors["bg_input"],
+            fg=self.colors["text_primary"],
+            insertbackground=self.colors["text_primary"],
+            relief=tk.FLAT,
+            highlightthickness=1,
+            highlightbackground=self.colors["border"],
+            highlightcolor=self.colors["accent"],
+            padx=12,
+            pady=12,
+        )
+        text.pack(fill=tk.BOTH, expand=True)
+        text.insert("1.0", content)
+        text.config(state=tk.DISABLED)
+
+        tk.Button(frame, text="Close", command=popup.destroy, **self.secondary_btn_style).pack(pady=(12, 0))
 
     def _finish_processing(self):
         self.processing = False
