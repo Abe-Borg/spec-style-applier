@@ -10,6 +10,7 @@ and batch processing modes.
 import os
 import sys
 import json
+import re
 import threading
 import subprocess
 from pathlib import Path
@@ -775,10 +776,77 @@ class Phase2GUI:
             pady=12,
         )
         text.pack(fill=tk.BOTH, expand=True)
-        text.insert("1.0", content)
+        self._render_markdown(text, content)
         text.config(state=tk.DISABLED)
 
         tk.Button(frame, text="Close", command=popup.destroy, **self.secondary_btn_style).pack(pady=(12, 0))
+
+    def _render_markdown(self, widget: scrolledtext.ScrolledText, markdown_text: str) -> None:
+        """Render a focused subset of Markdown into a Tk text widget."""
+        widget.tag_configure("h1", font=("Segoe UI", 16, "bold"), spacing1=10, spacing3=6)
+        widget.tag_configure("h2", font=("Segoe UI", 13, "bold"), spacing1=8, spacing3=4)
+        widget.tag_configure("h3", font=("Segoe UI", 11, "bold"), spacing1=6, spacing3=3)
+        widget.tag_configure("bold", font=("Segoe UI", 10, "bold"))
+        widget.tag_configure("italic", font=("Segoe UI", 10, "italic"))
+        widget.tag_configure("code", font=("Consolas", 10), background="#202020")
+        widget.tag_configure("hr", foreground=self.colors["text_muted"])
+
+        for raw_line in markdown_text.splitlines():
+            line = raw_line.rstrip("\n")
+            if not line.strip():
+                widget.insert(tk.END, "\n")
+                continue
+
+            if line.startswith("### "):
+                self._insert_inline_markdown(widget, f"{line[4:]}\n", base_tag="h3")
+                continue
+            if line.startswith("## "):
+                self._insert_inline_markdown(widget, f"{line[3:]}\n", base_tag="h2")
+                continue
+            if line.startswith("# "):
+                self._insert_inline_markdown(widget, f"{line[2:]}\n", base_tag="h1")
+                continue
+
+            if re.fullmatch(r"\s*[-*_]{3,}\s*", line):
+                widget.insert(tk.END, "─" * 48 + "\n", ("hr",))
+                continue
+
+            bullet_match = re.match(r"^(\s*)([-*]|\d+\.)\s+(.*)$", line)
+            if bullet_match:
+                indent, marker, content = bullet_match.groups()
+                is_numbered = marker.endswith(".") and marker[:-1].isdigit()
+                bullet = f"{marker if is_numbered else '•'} "
+                widget.insert(tk.END, indent + bullet)
+                self._insert_inline_markdown(widget, f"{content}\n")
+                continue
+
+            self._insert_inline_markdown(widget, f"{line}\n")
+
+    def _insert_inline_markdown(self, widget: scrolledtext.ScrolledText, text: str, base_tag: Optional[str] = None) -> None:
+        """Insert inline markdown (**bold**, *italic*, `code`) into widget."""
+        combined_re = re.compile(r"(`[^`]+`|\*\*[^*]+\*\*|\*[^*]+\*)")
+        idx = 0
+        for match in combined_re.finditer(text):
+            if match.start() > idx:
+                tags = (base_tag,) if base_tag else ()
+                widget.insert(tk.END, text[idx:match.start()], tags)
+
+            token = match.group(0)
+            if token.startswith("**"):
+                token_text = token[2:-2]
+                tags = ("bold",) if not base_tag else (base_tag, "bold")
+            elif token.startswith("`"):
+                token_text = token[1:-1]
+                tags = ("code",) if not base_tag else (base_tag, "code")
+            else:
+                token_text = token[1:-1]
+                tags = ("italic",) if not base_tag else (base_tag, "italic")
+            widget.insert(tk.END, token_text, tags)
+            idx = match.end()
+
+        if idx < len(text):
+            tags = (base_tag,) if base_tag else ()
+            widget.insert(tk.END, text[idx:], tags)
 
     def _finish_processing(self):
         self.processing = False
