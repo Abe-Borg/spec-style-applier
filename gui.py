@@ -35,10 +35,25 @@ def _check_numbering_module_needed(arch_styles_xml: str, needed_style_ids: list)
 
 class Phase2GUI:
     def __init__(self, root: tk.Tk):
+        self.colors = {
+            "bg_dark": "#0D0D0D",
+            "bg_card": "#1A1A1A",
+            "bg_input": "#252525",
+            "border": "#333333",
+            "text_primary": "#FFFFFF",
+            "text_secondary": "#B0B0B0",
+            "text_muted": "#707070",
+            "accent": "#3B82F6",
+            "accent_hover": "#2563EB",
+            "success": "#22C55E",
+            "error": "#EF4444",
+        }
+
         self.root = root
         self.root.title("Phase 2 — MEP Spec Styling Engine")
-        self.root.geometry("780x680")
-        self.root.minsize(600, 500)
+        self.root.geometry("900x850")
+        self.root.minsize(750, 700)
+        self.root.configure(bg=self.colors["bg_dark"])
 
         self.processing = False
         self.output_path: Optional[Path] = None
@@ -47,80 +62,213 @@ class Phase2GUI:
         self._build_ui()
 
     def _build_ui(self):
-        # Main frame with padding
-        main = ttk.Frame(self.root, padding=10)
+        self._apply_styles()
+
+        main = tk.Frame(self.root, bg=self.colors["bg_dark"], padx=24, pady=24)
         main.pack(fill=tk.BOTH, expand=True)
 
-        # ── Input Section ────────────────────────────────────────────────
-        input_frame = ttk.LabelFrame(main, text="Input", padding=8)
-        input_frame.pack(fill=tk.X, pady=(0, 8))
+        header = tk.Frame(main, bg=self.colors["bg_dark"])
+        header.pack(fill=tk.X, pady=(0, 14))
+        tk.Label(
+            header,
+            text="PHASE 2 MEP STYLING ENGINE",
+            bg=self.colors["bg_dark"],
+            fg=self.colors["text_primary"],
+            font=("Segoe UI", 20, "bold"),
+        ).pack(anchor="w")
+        tk.Label(
+            header,
+            text="Apply architect style language to target specs",
+            bg=self.colors["bg_dark"],
+            fg=self.colors["text_secondary"],
+            font=("Segoe UI", 11),
+        ).pack(anchor="w", pady=(2, 0))
 
-        # Mode toggle
-        mode_frame = ttk.Frame(input_frame)
-        mode_frame.pack(fill=tk.X, pady=(0, 6))
+        input_frame = tk.Frame(main, bg=self.colors["bg_card"], padx=16, pady=12)
+        input_frame.pack(fill=tk.X, pady=(0, 12))
+        tk.Label(input_frame, text="INPUTS", bg=self.colors["bg_card"], fg=self.colors["text_muted"],
+                 font=("Segoe UI", 10, "bold")).pack(anchor="w", pady=(0, 8))
+
+        mode_frame = tk.Frame(input_frame, bg=self.colors["bg_card"])
+        mode_frame.pack(fill=tk.X, pady=(0, 8))
         self.batch_var = tk.BooleanVar(value=False)
-        ttk.Radiobutton(mode_frame, text="Single File", variable=self.batch_var,
-                        value=False, command=self._on_mode_change).pack(side=tk.LEFT, padx=(0, 12))
-        ttk.Radiobutton(mode_frame, text="Batch Mode (folder)", variable=self.batch_var,
-                        value=True, command=self._on_mode_change).pack(side=tk.LEFT)
+        tk.Radiobutton(
+            mode_frame,
+            text="Single File",
+            variable=self.batch_var,
+            value=False,
+            command=self._on_mode_change,
+            bg=self.colors["bg_card"],
+            activebackground=self.colors["bg_card"],
+            fg=self.colors["text_secondary"],
+            activeforeground=self.colors["text_primary"],
+            selectcolor=self.colors["bg_input"],
+            font=("Segoe UI", 10),
+            highlightthickness=0,
+        ).pack(side=tk.LEFT, padx=(0, 12))
+        tk.Radiobutton(
+            mode_frame,
+            text="Batch Mode (folder)",
+            variable=self.batch_var,
+            value=True,
+            command=self._on_mode_change,
+            bg=self.colors["bg_card"],
+            activebackground=self.colors["bg_card"],
+            fg=self.colors["text_secondary"],
+            activeforeground=self.colors["text_primary"],
+            selectcolor=self.colors["bg_input"],
+            font=("Segoe UI", 10),
+            highlightthickness=0,
+        ).pack(side=tk.LEFT)
 
         # Target DOCX / folder
-        row1 = ttk.Frame(input_frame)
+        row1 = tk.Frame(input_frame, bg=self.colors["bg_card"])
         row1.pack(fill=tk.X, pady=2)
-        self.target_label = ttk.Label(row1, text="Target Spec (.docx):", width=22, anchor="w")
+        self.target_label = tk.Label(row1, text="Target Spec (.docx):", width=22, anchor="w",
+                                     bg=self.colors["bg_card"], fg=self.colors["text_secondary"],
+                                     font=("Segoe UI", 11))
         self.target_label.pack(side=tk.LEFT)
         self.target_var = tk.StringVar()
-        ttk.Entry(row1, textvariable=self.target_var).pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(0, 4))
-        self.target_btn = ttk.Button(row1, text="Browse...", command=self._browse_target)
+        tk.Entry(
+            row1,
+            textvariable=self.target_var,
+            bg=self.colors["bg_input"],
+            fg=self.colors["text_primary"],
+            insertbackground=self.colors["text_primary"],
+            relief=tk.FLAT,
+            highlightthickness=1,
+            highlightbackground=self.colors["border"],
+            highlightcolor=self.colors["accent"],
+            font=("Consolas", 11),
+        ).pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(0, 6), ipady=7)
+        self.target_btn = tk.Button(row1, text="Browse...", command=self._browse_target, **self.secondary_btn_style)
         self.target_btn.pack(side=tk.RIGHT)
 
         # Architect template folder
-        row2 = ttk.Frame(input_frame)
+        row2 = tk.Frame(input_frame, bg=self.colors["bg_card"])
         row2.pack(fill=tk.X, pady=2)
-        ttk.Label(row2, text="Architect Template Folder:", width=22, anchor="w").pack(side=tk.LEFT)
+        tk.Label(row2, text="Architect Template Folder:", width=22, anchor="w",
+                 bg=self.colors["bg_card"], fg=self.colors["text_secondary"], font=("Segoe UI", 11)).pack(side=tk.LEFT)
         self.arch_var = tk.StringVar()
-        ttk.Entry(row2, textvariable=self.arch_var).pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(0, 4))
-        ttk.Button(row2, text="Browse...", command=self._browse_arch).pack(side=tk.RIGHT)
+        tk.Entry(
+            row2,
+            textvariable=self.arch_var,
+            bg=self.colors["bg_input"],
+            fg=self.colors["text_primary"],
+            insertbackground=self.colors["text_primary"],
+            relief=tk.FLAT,
+            highlightthickness=1,
+            highlightbackground=self.colors["border"],
+            highlightcolor=self.colors["accent"],
+            font=("Consolas", 11),
+        ).pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(0, 6), ipady=7)
+        tk.Button(row2, text="Browse...", command=self._browse_arch, **self.secondary_btn_style).pack(side=tk.RIGHT)
 
         # API key
-        row3 = ttk.Frame(input_frame)
+        row3 = tk.Frame(input_frame, bg=self.colors["bg_card"])
         row3.pack(fill=tk.X, pady=2)
-        ttk.Label(row3, text="Anthropic API Key:", width=22, anchor="w").pack(side=tk.LEFT)
+        tk.Label(row3, text="Anthropic API Key:", width=22, anchor="w",
+                 bg=self.colors["bg_card"], fg=self.colors["text_secondary"], font=("Segoe UI", 11)).pack(side=tk.LEFT)
         self.api_key_var = tk.StringVar(value=os.environ.get("ANTHROPIC_API_KEY", ""))
-        ttk.Entry(row3, textvariable=self.api_key_var, show="*").pack(side=tk.LEFT, fill=tk.X, expand=True)
+        tk.Entry(
+            row3,
+            textvariable=self.api_key_var,
+            show="•",
+            bg=self.colors["bg_input"],
+            fg=self.colors["text_primary"],
+            insertbackground=self.colors["text_primary"],
+            relief=tk.FLAT,
+            highlightthickness=1,
+            highlightbackground=self.colors["border"],
+            highlightcolor=self.colors["accent"],
+            font=("Consolas", 11),
+        ).pack(side=tk.LEFT, fill=tk.X, expand=True, ipady=7)
 
         # ── Action Section ───────────────────────────────────────────────
-        action_frame = ttk.Frame(main)
-        action_frame.pack(fill=tk.X, pady=(0, 8))
+        action_frame = tk.Frame(main, bg=self.colors["bg_dark"])
+        action_frame.pack(fill=tk.X, pady=(0, 12))
 
-        self.run_btn = ttk.Button(action_frame, text="Run Phase 2", command=self._run)
-        self.run_btn.pack(side=tk.LEFT, padx=(0, 8))
+        self.run_btn = tk.Button(action_frame, text="Run Phase 2", command=self._run, **self.primary_btn_style)
+        self.run_btn.pack(side=tk.LEFT, padx=(0, 12), ipadx=18, ipady=10)
 
-        self.progress = ttk.Progressbar(action_frame, mode="indeterminate", length=200)
+        self.run_btn.bind("<Enter>", lambda _e: self.run_btn.config(bg=self.colors["accent_hover"]))
+        self.run_btn.bind("<Leave>", lambda _e: self.run_btn.config(bg=self.colors["accent"]))
+
+        self.progress = ttk.Progressbar(action_frame, mode="indeterminate", length=200, style=self.progress_style)
         self.progress.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(0, 8))
 
         self.status_var = tk.StringVar(value="Ready")
-        ttk.Label(action_frame, textvariable=self.status_var, width=30, anchor="w").pack(side=tk.RIGHT)
+        tk.Label(action_frame, textvariable=self.status_var, width=30, anchor="w",
+                 bg=self.colors["bg_dark"], fg=self.colors["text_secondary"],
+                 font=("Segoe UI", 11)).pack(side=tk.RIGHT)
 
         # ── Log Section ──────────────────────────────────────────────────
-        log_frame = ttk.LabelFrame(main, text="Log", padding=4)
-        log_frame.pack(fill=tk.BOTH, expand=True, pady=(0, 8))
+        log_frame = tk.Frame(main, bg=self.colors["bg_card"], padx=16, pady=12)
+        log_frame.pack(fill=tk.BOTH, expand=True, pady=(0, 12))
+        tk.Label(log_frame, text="ACTIVITY LOG", bg=self.colors["bg_card"], fg=self.colors["text_muted"],
+                 font=("Segoe UI", 10, "bold")).pack(anchor="w", pady=(0, 8))
 
         self.log_text = scrolledtext.ScrolledText(log_frame, height=15, state=tk.DISABLED,
-                                                   font=("Consolas", 9), wrap=tk.WORD)
+                                                   font=("Consolas", 11), wrap=tk.WORD,
+                                                   bg=self.colors["bg_input"],
+                                                   fg=self.colors["text_secondary"],
+                                                   insertbackground=self.colors["text_primary"],
+                                                   relief=tk.FLAT,
+                                                   highlightthickness=1,
+                                                   highlightbackground=self.colors["border"],
+                                                   highlightcolor=self.colors["accent"])
         self.log_text.pack(fill=tk.BOTH, expand=True)
 
         # ── Bottom Buttons ───────────────────────────────────────────────
-        btn_frame = ttk.Frame(main)
+        btn_frame = tk.Frame(main, bg=self.colors["bg_dark"])
         btn_frame.pack(fill=tk.X)
 
-        self.open_output_btn = ttk.Button(btn_frame, text="Open Output DOCX",
-                                           command=self._open_output, state=tk.DISABLED)
+        self.open_output_btn = tk.Button(btn_frame, text="Open Output DOCX",
+                                         command=self._open_output, state=tk.DISABLED,
+                                         **self.secondary_btn_style)
         self.open_output_btn.pack(side=tk.LEFT, padx=(0, 8))
 
-        self.open_log_btn = ttk.Button(btn_frame, text="Open Log",
-                                        command=self._open_log, state=tk.DISABLED)
+        self.open_log_btn = tk.Button(btn_frame, text="Open Log",
+                                      command=self._open_log, state=tk.DISABLED,
+                                      **self.secondary_btn_style)
         self.open_log_btn.pack(side=tk.LEFT)
+
+    def _apply_styles(self):
+        self.primary_btn_style = {
+            "bg": self.colors["accent"],
+            "fg": self.colors["text_primary"],
+            "activebackground": self.colors["accent_hover"],
+            "activeforeground": self.colors["text_primary"],
+            "relief": tk.FLAT,
+            "bd": 0,
+            "font": ("Segoe UI", 12, "bold"),
+            "cursor": "hand2",
+            "disabledforeground": self.colors["text_muted"],
+        }
+        self.secondary_btn_style = {
+            "bg": self.colors["bg_input"],
+            "fg": self.colors["text_secondary"],
+            "activebackground": self.colors["border"],
+            "activeforeground": self.colors["text_primary"],
+            "relief": tk.FLAT,
+            "bd": 1,
+            "font": ("Segoe UI", 10),
+            "cursor": "hand2",
+            "disabledforeground": self.colors["text_muted"],
+        }
+
+        style = ttk.Style()
+        style.theme_use("default")
+        style.configure(
+            "Dark.Horizontal.TProgressbar",
+            background=self.colors["accent"],
+            troughcolor=self.colors["bg_input"],
+            bordercolor=self.colors["border"],
+            lightcolor=self.colors["accent"],
+            darkcolor=self.colors["accent"],
+            thickness=4,
+        )
+        self.progress_style = "Dark.Horizontal.TProgressbar"
 
     def _on_mode_change(self):
         if self.batch_var.get():
