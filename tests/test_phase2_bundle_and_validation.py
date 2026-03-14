@@ -64,6 +64,20 @@ def test_preclassify_markers():
     assert out[4] == "SUBSUBPARAGRAPH"
 
 
+def test_end_of_section_is_deterministic_not_boilerplate_removed(tmp_path: Path):
+    extract_dir = _write_document_xml(
+        tmp_path,
+        '<w:p><w:r><w:t>END OF SECTION 23 05 13</w:t></w:r></w:p>',
+    )
+
+    bundle = build_phase2_slim_bundle(extract_dir, available_roles=["END_OF_SECTION", "PART", "ARTICLE"])
+    assert bundle["filter_report"]["paragraphs_removed_entirely"] == []
+    assert bundle["deterministic_classifications"] == [
+        {"paragraph_index": 0, "csi_role": "END_OF_SECTION"}
+    ]
+    assert bundle["paragraphs"] == []
+
+
 def test_validation_fails_on_duplicate_and_missing_coverage():
     bundle = {
         "paragraphs": [{"paragraph_index": 10}, {"paragraph_index": 11}],
