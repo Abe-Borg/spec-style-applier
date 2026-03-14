@@ -206,6 +206,7 @@ Before and after document.xml modifications, SHA256 hashes of headers/footers an
 The LLM classifies paragraphs into these semantic roles:
 - `SectionID` — section number line (e.g., "SECTION 23 05 13")
 - `SectionTitle` — section name line
+- `END_OF_SECTION` — end of section marker (e.g., "END OF SECTION")
 - `PART` — part headings (PART 1, PART 2, PART 3)
 - `ARTICLE` — article numbers (1.01, 2.03)
 - `PARAGRAPH` — lettered paragraphs (A., B., C.)

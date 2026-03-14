@@ -36,9 +36,6 @@ PHASE2_RUN_INSTRUCTION = _load_prompt_text("phase2_run_instruction.txt")
 # -------------------------------
 
 BOILERPLATE_PATTERNS = [
-    # END OF SECTION structural markers
-    (r'(?i)^\s*END\s+OF\s+SECTION\s*.*$', 'end_of_section'),
-
     # Specifier notes - bracketed formats
     (r'\[Note to [Ss]pecifier[:\s][^\]]*\]', 'specifier_note'),
     (r'\[Specifier[:\s][^\]]*\]', 'specifier_note'),
@@ -108,6 +105,7 @@ _TABLE_BLOCK_RX = re.compile(r"<w:tbl\b[\s\S]*?</w:tbl>")
 _PART_RX = re.compile(r"^\s*PART\s+[123]\b", re.IGNORECASE)
 _ARTICLE_RX = re.compile(r"^\s*\d+\.\d{2}\b")
 _SECTION_ID_RX = re.compile(r"^\s*SECTION\s+\d{2}(?:\s+\d{2}){2,}\b", re.IGNORECASE)
+_END_OF_SECTION_RX = re.compile(r"^\s*END\s+OF\s+SECTION\s*", re.IGNORECASE)
 _ALL_CAPS_RX = re.compile(r"^[^a-z]*[A-Z][^a-z]*$")
 _MARKER_RX = [
     (re.compile(r"^\s*[A-Z]\.\s+"), "upper_alpha"),
@@ -166,6 +164,7 @@ def _detect_marker_type(text: str, numpr: Dict[str, Optional[str]]) -> Optional[
 def _resolve_role(preferred: str, available_roles: List[str]) -> Optional[str]:
     fallback_chain = {
         "SectionID": ["SectionID", "SectionTitle"],
+        "END_OF_SECTION": ["END_OF_SECTION"],
         "SUBSUBPARAGRAPH": ["SUBSUBPARAGRAPH", "SUBPARAGRAPH", "PARAGRAPH"],
         "SUBPARAGRAPH": ["SUBPARAGRAPH", "PARAGRAPH"],
         "PARAGRAPH": ["PARAGRAPH"],
@@ -185,6 +184,8 @@ def _deterministic_role_for_paragraph(paragraph: Dict[str, Any], prev_text: str 
         return None
     if _SECTION_ID_RX.match(text):
         return "SectionID"
+    if _END_OF_SECTION_RX.match(text):
+        return "END_OF_SECTION"
     if _PART_RX.match(text):
         return "PART"
     if _ARTICLE_RX.match(text):

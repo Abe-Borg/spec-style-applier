@@ -16,7 +16,7 @@ has a recognizable CSI role.
 Paragraphs to SKIP (do not include in classifications):
 - Empty or blank paragraphs
 - Paragraphs containing section/page break markup (w:sectPr)
-- "END OF SECTION" lines
+- "END OF SECTION" lines (these are classified deterministically and excluded from your input)
 - Boilerplate lines that survived filtering (e.g., spec headers/footers)
 
 Every other paragraph MUST receive a classification.

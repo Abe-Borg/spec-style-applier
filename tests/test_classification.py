@@ -1,42 +1,42 @@
-"""Tests for core.classification — boilerplate filtering, especially END OF SECTION."""
+"""Tests for core.classification boilerplate filtering and deterministic classification."""
 
-import pytest
-from core.classification import strip_boilerplate_with_report
+from core.classification import (
+    _deterministic_role_for_paragraph,
+    _resolve_role,
+    strip_boilerplate_with_report,
+)
 
 
-class TestEndOfSectionFiltering:
-    """END OF SECTION lines must be stripped and tagged 'end_of_section'."""
+class TestEndOfSectionBoilerplateBehavior:
+    """END OF SECTION lines are no longer boilerplate-stripped."""
 
-    def test_plain_end_of_section(self):
+    def test_plain_end_of_section_passes_through(self):
         cleaned, tags = strip_boilerplate_with_report("END OF SECTION")
-        assert cleaned == ""
-        assert "end_of_section" in tags
+        assert cleaned == "END OF SECTION"
+        assert tags == []
 
-    def test_end_of_section_with_number(self):
+    def test_end_of_section_with_number_passes_through(self):
         cleaned, tags = strip_boilerplate_with_report("END OF SECTION 211300")
-        assert cleaned == ""
-        assert "end_of_section" in tags
+        assert cleaned == "END OF SECTION 211300"
+        assert tags == []
 
-    def test_end_of_section_with_spaced_number(self):
+    def test_end_of_section_with_spaced_number_passes_through(self):
         cleaned, tags = strip_boilerplate_with_report("END OF SECTION 23 05 13")
-        assert cleaned == ""
-        assert "end_of_section" in tags
+        assert cleaned == "END OF SECTION 23 05 13"
+        assert tags == []
 
-    def test_lowercase(self):
-        cleaned, tags = strip_boilerplate_with_report("end of section")
-        assert cleaned == ""
-        assert "end_of_section" in tags
-
-    def test_mixed_case(self):
+    def test_end_of_section_case_variants_pass_through(self):
         cleaned, tags = strip_boilerplate_with_report("End Of Section")
-        assert cleaned == ""
-        assert "end_of_section" in tags
+        assert cleaned == "End Of Section"
+        assert tags == []
 
-    def test_leading_trailing_whitespace(self):
+    def test_end_of_section_trims_whitespace_only(self):
         cleaned, tags = strip_boilerplate_with_report("  END OF SECTION  ")
-        assert cleaned == ""
-        assert "end_of_section" in tags
+        assert cleaned == "END OF SECTION"
+        assert tags == []
 
+
+class TestBoilerplateRegressionChecks:
     def test_real_content_unchanged(self):
         text = "A. Provide valves as specified."
         cleaned, tags = strip_boilerplate_with_report(text)
@@ -55,30 +55,8 @@ class TestEndOfSectionFiltering:
         assert cleaned == text
         assert tags == []
 
-
-class TestEndOfSectionEdgeCases:
-    """Additional END OF SECTION edge cases."""
-
-    def test_trailing_period(self):
-        cleaned, tags = strip_boilerplate_with_report("END OF SECTION.")
-        assert cleaned == ""
-        assert "end_of_section" in tags
-
-    def test_with_suffix(self):
-        cleaned, tags = strip_boilerplate_with_report("END OF SECTION - MECHANICAL")
-        assert cleaned == ""
-        assert "end_of_section" in tags
-
-    def test_not_matched_when_embedded_in_sentence(self):
-        """Regex anchors at start of line — embedded phrase should NOT match."""
+    def test_end_of_section_embedded_sentence_not_modified(self):
         text = "THE END OF SECTION DESCRIBES THE SCOPE"
-        cleaned, tags = strip_boilerplate_with_report(text)
-        assert cleaned == text
-        assert tags == []
-
-    def test_dashes_before_prevent_match(self):
-        """Leading dashes prevent the '^\\s*END' anchor from matching."""
-        text = "--- END OF SECTION ---"
         cleaned, tags = strip_boilerplate_with_report(text)
         assert cleaned == text
         assert tags == []
@@ -87,3 +65,23 @@ class TestEndOfSectionEdgeCases:
         cleaned, tags = strip_boilerplate_with_report("")
         assert cleaned == ""
         assert tags == []
+
+
+class TestEndOfSectionDeterministicClassification:
+    def test_deterministic_end_of_section_variants(self):
+        for text in [
+            "END OF SECTION",
+            "End of Section",
+            "END OF SECTION 23 05 13",
+            "  END OF SECTION  ",
+        ]:
+            paragraph = {"text": text, "in_table": False, "marker_type": None}
+            assert _deterministic_role_for_paragraph(paragraph) == "END_OF_SECTION"
+
+    def test_resolve_role_when_available(self):
+        resolved = _resolve_role("END_OF_SECTION", ["END_OF_SECTION", "PART", "ARTICLE"])
+        assert resolved == "END_OF_SECTION"
+
+    def test_resolve_role_when_unavailable(self):
+        resolved = _resolve_role("END_OF_SECTION", ["PART", "ARTICLE"])
+        assert resolved is None

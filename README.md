@@ -107,6 +107,7 @@ pip install -r requirements-build.txt
 |------|-------------|
 | `SectionID` | Section number line (e.g., "SECTION 23 05 13") |
 | `SectionTitle` | Section name line |
+| `END_OF_SECTION` | End of section marker (e.g., "END OF SECTION") |
 | `PART` | Part headings (PART 1, PART 2, PART 3) |
 | `ARTICLE` | Article numbers (1.01, 2.03) |
 | `PARAGRAPH` | Lettered paragraphs (A., B., C.) |
