@@ -17,7 +17,32 @@ from pathlib import Path
 from typing import Optional, List
 
 import tkinter as tk
-from tkinter import ttk, filedialog, messagebox, scrolledtext
+from tkinter import filedialog, messagebox, scrolledtext
+
+import customtkinter as ctk
+
+
+COLORS = {
+    "bg_dark": "#0D0D0D",
+    "bg_card": "#1A1A1A",
+    "bg_input": "#252525",
+    "border": "#333333",
+    "text_primary": "#FFFFFF",
+    "text_secondary": "#B0B0B0",
+    "text_muted": "#707070",
+    "accent": "#3B82F6",
+    "accent_hover": "#2563EB",
+    "accent_glow": "#60A5FA",
+    "success": "#22C55E",
+    "success_glow": "#4ADE80",
+    "warning": "#F59E0B",
+    "error": "#EF4444",
+    "critical": "#DC2626",
+    "high": "#F97316",
+    "medium": "#EAB308",
+    "gripe": "#A855F7",
+    "coordination": "#06B6D4",
+}
 
 
 HOW_IT_WORKS_TEXT = """# How It Works
@@ -167,303 +192,270 @@ def _check_numbering_module_needed(arch_styles_xml: str, needed_style_ids: list)
             )
 
 
-class Phase2GUI:
-    def __init__(self, root: tk.Tk):
-        self.colors = {
-            "bg_dark": "#0D0D0D",
-            "bg_card": "#1A1A1A",
-            "bg_input": "#252525",
-            "border": "#333333",
-            "text_primary": "#FFFFFF",
-            "text_secondary": "#B0B0B0",
-            "text_muted": "#707070",
-            "accent": "#3B82F6",
-            "accent_hover": "#2563EB",
-            "success": "#22C55E",
-            "error": "#EF4444",
-        }
-
-        self.root = root
-        self.root.title("Phase 2 — MEP Spec Styling Engine")
-        self.root.geometry("900x850")
-        self.root.minsize(750, 700)
-        self.root.configure(bg=self.colors["bg_dark"])
+class Phase2GUI(ctk.CTk):
+    def __init__(self):
+        super().__init__()
+        self.title("Phase 2 — MEP Spec Styling Engine")
+        self.geometry("900x850")
+        self.minsize(750, 700)
+        self.configure(fg_color=COLORS["bg_dark"])
 
         self.processing = False
         self.output_path: Optional[Path] = None
         self.log_path: Optional[Path] = None
 
+        self._mode_var = ctk.StringVar(value="Single File")
+        self.status_var = ctk.StringVar(value="Ready")
+        self._inputs_expanded = True
+        self._log_expanded = True
+
         self._build_ui()
 
     def _build_ui(self):
-        self._apply_styles()
+        main = ctk.CTkFrame(self, fg_color="transparent")
+        main.pack(fill="both", expand=True, padx=24, pady=24)
 
-        main = tk.Frame(self.root, bg=self.colors["bg_dark"], padx=24, pady=24)
-        main.pack(fill=tk.BOTH, expand=True)
+        header = ctk.CTkFrame(main, fg_color="transparent")
+        header.pack(fill="x", pady=(0, 14))
 
-        header = tk.Frame(main, bg=self.colors["bg_dark"])
-        header.pack(fill=tk.X, pady=(0, 14))
-
-        header_left = tk.Frame(header, bg=self.colors["bg_dark"])
-        header_left.pack(side=tk.LEFT, fill=tk.X, expand=True)
-        tk.Label(
+        header_left = ctk.CTkFrame(header, fg_color="transparent")
+        header_left.pack(side="left", fill="x", expand=True)
+        ctk.CTkLabel(
             header_left,
             text="PHASE 2 MEP STYLING ENGINE",
-            bg=self.colors["bg_dark"],
-            fg=self.colors["text_primary"],
-            font=("Segoe UI", 20, "bold"),
+            text_color=COLORS["text_primary"],
+            font=ctk.CTkFont(family="Segoe UI", size=20, weight="bold"),
         ).pack(anchor="w")
-        tk.Label(
+        ctk.CTkLabel(
             header_left,
             text="Apply architect style language to target specs",
-            bg=self.colors["bg_dark"],
-            fg=self.colors["text_secondary"],
-            font=("Segoe UI", 11),
+            text_color=COLORS["text_secondary"],
+            font=ctk.CTkFont(family="Segoe UI", size=11),
         ).pack(anchor="w", pady=(2, 0))
 
-        header_right = tk.Frame(header, bg=self.colors["bg_dark"])
-        header_right.pack(side=tk.RIGHT, anchor="ne")
-        tk.Button(
+        header_right = ctk.CTkFrame(header, fg_color="transparent")
+        header_right.pack(side="right", anchor="ne")
+        self._create_secondary_button(
             header_right,
             text="How It Works",
             command=lambda: self._show_info_popup("How It Works", HOW_IT_WORKS_TEXT),
-            **self.secondary_btn_style,
-        ).pack(side=tk.LEFT, padx=(0, 8))
-        tk.Button(
+        ).pack(side="left", padx=(0, 8))
+        self._create_secondary_button(
             header_right,
             text="How to Use",
             command=lambda: self._show_info_popup("How to Use", HOW_TO_USE_TEXT),
-            **self.secondary_btn_style,
-        ).pack(side=tk.LEFT)
+        ).pack(side="left")
 
-        input_frame = tk.Frame(main, bg=self.colors["bg_card"], padx=16, pady=12)
-        input_frame.pack(fill=tk.X, pady=(0, 12))
-        tk.Label(input_frame, text="INPUTS", bg=self.colors["bg_card"], fg=self.colors["text_muted"],
-                 font=("Segoe UI", 10, "bold")).pack(anchor="w", pady=(0, 8))
+        input_card = ctk.CTkFrame(main, fg_color=COLORS["bg_card"], corner_radius=8)
+        input_card.pack(fill="x", pady=(0, 12))
 
-        mode_frame = tk.Frame(input_frame, bg=self.colors["bg_card"])
-        mode_frame.pack(fill=tk.X, pady=(0, 8))
-        self.batch_var = tk.BooleanVar(value=False)
-        tk.Radiobutton(
-            mode_frame,
-            text="Single File",
-            variable=self.batch_var,
-            value=False,
-            command=self._on_mode_change,
-            bg=self.colors["bg_card"],
-            activebackground=self.colors["bg_card"],
-            fg=self.colors["text_secondary"],
-            activeforeground=self.colors["text_primary"],
-            selectcolor=self.colors["bg_input"],
-            font=("Segoe UI", 10),
-            highlightthickness=0,
-        ).pack(side=tk.LEFT, padx=(0, 12))
-        tk.Radiobutton(
-            mode_frame,
-            text="Batch Mode (folder)",
-            variable=self.batch_var,
-            value=True,
-            command=self._on_mode_change,
-            bg=self.colors["bg_card"],
-            activebackground=self.colors["bg_card"],
-            fg=self.colors["text_secondary"],
-            activeforeground=self.colors["text_primary"],
-            selectcolor=self.colors["bg_input"],
-            font=("Segoe UI", 10),
-            highlightthickness=0,
-        ).pack(side=tk.LEFT)
+        input_header = ctk.CTkFrame(input_card, fg_color="transparent")
+        input_header.pack(fill="x", padx=16, pady=12)
+        input_header.bind("<Button-1>", self._toggle_inputs)
 
-        # Target DOCX / folder
-        row1 = tk.Frame(input_frame, bg=self.colors["bg_card"])
-        row1.pack(fill=tk.X, pady=2)
-        self.target_label = tk.Label(row1, text="Target Spec (.docx):", width=22, anchor="w",
-                                     bg=self.colors["bg_card"], fg=self.colors["text_secondary"],
-                                     font=("Segoe UI", 11))
-        self.target_label.pack(side=tk.LEFT)
-        self.target_var = tk.StringVar()
-        tk.Entry(
-            row1,
-            textvariable=self.target_var,
-            bg=self.colors["bg_input"],
-            fg=self.colors["text_primary"],
-            insertbackground=self.colors["text_primary"],
-            relief=tk.FLAT,
-            highlightthickness=1,
-            highlightbackground=self.colors["border"],
-            highlightcolor=self.colors["accent"],
-            font=("Consolas", 11),
-        ).pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(0, 6), ipady=7)
-        self.target_btn = tk.Button(row1, text="Browse...", command=self._browse_target, **self.secondary_btn_style)
-        self.target_btn.pack(side=tk.RIGHT)
-
-        # Architect template folder
-        row2 = tk.Frame(input_frame, bg=self.colors["bg_card"])
-        row2.pack(fill=tk.X, pady=2)
-        tk.Label(row2, text="Architect Template Folder:", width=22, anchor="w",
-                 bg=self.colors["bg_card"], fg=self.colors["text_secondary"], font=("Segoe UI", 11)).pack(side=tk.LEFT)
-        self.arch_var = tk.StringVar()
-        tk.Entry(
-            row2,
-            textvariable=self.arch_var,
-            bg=self.colors["bg_input"],
-            fg=self.colors["text_primary"],
-            insertbackground=self.colors["text_primary"],
-            relief=tk.FLAT,
-            highlightthickness=1,
-            highlightbackground=self.colors["border"],
-            highlightcolor=self.colors["accent"],
-            font=("Consolas", 11),
-        ).pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(0, 6), ipady=7)
-        tk.Button(row2, text="Browse...", command=self._browse_arch, **self.secondary_btn_style).pack(side=tk.RIGHT)
-
-        # API key
-        row3 = tk.Frame(input_frame, bg=self.colors["bg_card"])
-        row3.pack(fill=tk.X, pady=2)
-        tk.Label(row3, text="Anthropic API Key:", width=22, anchor="w",
-                 bg=self.colors["bg_card"], fg=self.colors["text_secondary"], font=("Segoe UI", 11)).pack(side=tk.LEFT)
-        self.api_key_var = tk.StringVar(value=os.environ.get("ANTHROPIC_API_KEY", ""))
-        tk.Entry(
-            row3,
-            textvariable=self.api_key_var,
-            show="•",
-            bg=self.colors["bg_input"],
-            fg=self.colors["text_primary"],
-            insertbackground=self.colors["text_primary"],
-            relief=tk.FLAT,
-            highlightthickness=1,
-            highlightbackground=self.colors["border"],
-            highlightcolor=self.colors["accent"],
-            font=("Consolas", 11),
-        ).pack(side=tk.LEFT, fill=tk.X, expand=True, ipady=7)
-
-        # Output folder
-        row4 = tk.Frame(input_frame, bg=self.colors["bg_card"])
-        row4.pack(fill=tk.X, pady=2)
-        tk.Label(row4, text="Output Folder:", width=22, anchor="w",
-                 bg=self.colors["bg_card"], fg=self.colors["text_secondary"], font=("Segoe UI", 11)).pack(side=tk.LEFT)
-        self.output_dir_var = tk.StringVar()
-        tk.Entry(
-            row4,
-            textvariable=self.output_dir_var,
-            bg=self.colors["bg_input"],
-            fg=self.colors["text_primary"],
-            insertbackground=self.colors["text_primary"],
-            relief=tk.FLAT,
-            highlightthickness=1,
-            highlightbackground=self.colors["border"],
-            highlightcolor=self.colors["accent"],
-            font=("Consolas", 11),
-        ).pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(0, 6), ipady=7)
-        tk.Button(row4, text="Browse...", command=self._browse_output_dir, **self.secondary_btn_style).pack(side=tk.RIGHT)
-
-        # ── Action Section ───────────────────────────────────────────────
-        action_frame = tk.Frame(main, bg=self.colors["bg_dark"])
-        action_frame.pack(fill=tk.X, pady=(0, 12))
-
-        self.run_btn = tk.Button(action_frame, text="Run Phase 2", command=self._run, **self.primary_btn_style)
-        self.run_btn.pack(side=tk.LEFT, padx=(0, 12), ipadx=18, ipady=10)
-
-        self.run_btn.bind("<Enter>", lambda _e: self.run_btn.config(bg=self.colors["accent_hover"]))
-        self.run_btn.bind("<Leave>", lambda _e: self.run_btn.config(bg=self.colors["accent"]))
-
-        self.progress = ttk.Progressbar(action_frame, mode="indeterminate", length=200, style=self.progress_style)
-        self.progress.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(0, 8))
-
-        self.status_var = tk.StringVar(value="Ready")
-        tk.Label(action_frame, textvariable=self.status_var, width=30, anchor="w",
-                 bg=self.colors["bg_dark"], fg=self.colors["text_secondary"],
-                 font=("Segoe UI", 11)).pack(side=tk.RIGHT)
-
-        # ── Log Section ──────────────────────────────────────────────────
-        log_frame = tk.Frame(main, bg=self.colors["bg_card"], padx=16, pady=12)
-        log_frame.pack(fill=tk.BOTH, expand=True, pady=(0, 12))
-        tk.Label(log_frame, text="ACTIVITY LOG", bg=self.colors["bg_card"], fg=self.colors["text_muted"],
-                 font=("Segoe UI", 10, "bold")).pack(anchor="w", pady=(0, 8))
-
-        self.log_text = scrolledtext.ScrolledText(log_frame, height=15, state=tk.DISABLED,
-                                                   font=("Consolas", 11), wrap=tk.WORD,
-                                                   bg=self.colors["bg_input"],
-                                                   fg=self.colors["text_secondary"],
-                                                   insertbackground=self.colors["text_primary"],
-                                                   relief=tk.FLAT,
-                                                   highlightthickness=1,
-                                                   highlightbackground=self.colors["border"],
-                                                   highlightcolor=self.colors["accent"])
-        self.log_text.pack(fill=tk.BOTH, expand=True)
-
-        # ── Bottom Buttons ───────────────────────────────────────────────
-        btn_frame = tk.Frame(main, bg=self.colors["bg_dark"])
-        btn_frame.pack(fill=tk.X)
-
-        self.open_output_btn = tk.Button(btn_frame, text="Open Output DOCX",
-                                         command=self._open_output, state=tk.DISABLED,
-                                         **self.secondary_btn_style)
-        self.open_output_btn.pack(side=tk.LEFT, padx=(0, 8))
-
-        self.open_log_btn = tk.Button(btn_frame, text="Open Log",
-                                      command=self._open_log, state=tk.DISABLED,
-                                      **self.secondary_btn_style)
-        self.open_log_btn.pack(side=tk.LEFT)
-
-    def _apply_styles(self):
-        self.primary_btn_style = {
-            "bg": self.colors["accent"],
-            "fg": self.colors["text_primary"],
-            "activebackground": self.colors["accent_hover"],
-            "activeforeground": self.colors["text_primary"],
-            "relief": tk.FLAT,
-            "bd": 0,
-            "font": ("Segoe UI", 12, "bold"),
-            "cursor": "hand2",
-            "disabledforeground": self.colors["text_muted"],
-        }
-        self.secondary_btn_style = {
-            "bg": self.colors["bg_input"],
-            "fg": self.colors["text_secondary"],
-            "activebackground": self.colors["border"],
-            "activeforeground": self.colors["text_primary"],
-            "relief": tk.FLAT,
-            "bd": 1,
-            "font": ("Segoe UI", 10),
-            "cursor": "hand2",
-            "disabledforeground": self.colors["text_muted"],
-        }
-
-        style = ttk.Style()
-        style.theme_use("default")
-        style.configure(
-            "Dark.Horizontal.TProgressbar",
-            background=self.colors["accent"],
-            troughcolor=self.colors["bg_input"],
-            bordercolor=self.colors["border"],
-            lightcolor=self.colors["accent"],
-            darkcolor=self.colors["accent"],
-            thickness=4,
+        self._inputs_arrow = ctk.CTkLabel(
+            input_header,
+            text="▼",
+            width=20,
+            text_color=COLORS["text_muted"],
+            font=ctk.CTkFont(family="Consolas", size=12),
         )
-        self.progress_style = "Dark.Horizontal.TProgressbar"
+        self._inputs_arrow.pack(side="left")
+        self._inputs_arrow.bind("<Button-1>", self._toggle_inputs)
 
-    def _on_mode_change(self):
-        if self.batch_var.get():
-            self.target_label.config(text="Target Folder:")
+        inputs_title = ctk.CTkLabel(
+            input_header,
+            text="INPUTS",
+            text_color=COLORS["text_muted"],
+            font=ctk.CTkFont(family="Segoe UI", size=11, weight="bold"),
+        )
+        inputs_title.pack(side="left", padx=(4, 0))
+        inputs_title.bind("<Button-1>", self._toggle_inputs)
+
+        self._inputs_content = ctk.CTkFrame(input_card, fg_color="transparent")
+        self._inputs_content.pack(fill="x", padx=16, pady=(0, 16))
+        self._inputs_content.columnconfigure(1, weight=1)
+
+        ctk.CTkLabel(self._inputs_content, text="Mode", width=120, anchor="w", text_color=COLORS["text_secondary"], font=ctk.CTkFont(family="Segoe UI", size=11)).grid(row=0, column=0, sticky="w", pady=8)
+
+        mode_frame = ctk.CTkFrame(self._inputs_content, fg_color="transparent")
+        mode_frame.grid(row=0, column=1, sticky="w", padx=(8, 0), pady=8)
+        self.mode_selector = ctk.CTkSegmentedButton(
+            mode_frame,
+            values=["Single File", "Batch (folder)"],
+            variable=self._mode_var,
+            command=self._on_mode_change,
+            font=ctk.CTkFont(family="Segoe UI", size=11),
+            selected_color=COLORS["accent"],
+            selected_hover_color=COLORS["accent_hover"],
+            unselected_color=COLORS["bg_input"],
+            unselected_hover_color=COLORS["border"],
+            fg_color=COLORS["bg_input"],
+            text_color=COLORS["text_secondary"],
+            height=32,
+        )
+        self.mode_selector.pack(anchor="w")
+
+        self.target_label = ctk.CTkLabel(self._inputs_content, text="Target Spec (.docx):", width=120, anchor="w", text_color=COLORS["text_secondary"], font=ctk.CTkFont(family="Segoe UI", size=11))
+        self.target_label.grid(row=1, column=0, sticky="w", pady=8)
+        self.target_var = ctk.StringVar()
+        target_frame = ctk.CTkFrame(self._inputs_content, fg_color="transparent")
+        target_frame.grid(row=1, column=1, sticky="ew", padx=(8, 0), pady=8)
+        target_frame.columnconfigure(0, weight=1)
+        self.target_entry = ctk.CTkEntry(target_frame, textvariable=self.target_var, fg_color=COLORS["bg_input"], border_color=COLORS["border"], text_color=COLORS["text_primary"], font=ctk.CTkFont(family="Consolas", size=11), height=36)
+        self.target_entry.grid(row=0, column=0, sticky="ew", padx=(0, 6))
+        self.target_btn = self._create_secondary_button(target_frame, text="Browse...", command=self._browse_target, width=90)
+        self.target_btn.grid(row=0, column=1)
+
+        ctk.CTkLabel(self._inputs_content, text="Architect Template Folder:", width=120, anchor="w", text_color=COLORS["text_secondary"], font=ctk.CTkFont(family="Segoe UI", size=11)).grid(row=2, column=0, sticky="w", pady=8)
+        self.arch_var = ctk.StringVar()
+        arch_frame = ctk.CTkFrame(self._inputs_content, fg_color="transparent")
+        arch_frame.grid(row=2, column=1, sticky="ew", padx=(8, 0), pady=8)
+        arch_frame.columnconfigure(0, weight=1)
+        ctk.CTkEntry(arch_frame, textvariable=self.arch_var, fg_color=COLORS["bg_input"], border_color=COLORS["border"], text_color=COLORS["text_primary"], font=ctk.CTkFont(family="Consolas", size=11), height=36).grid(row=0, column=0, sticky="ew", padx=(0, 6))
+        self._create_secondary_button(arch_frame, text="Browse...", command=self._browse_arch, width=90).grid(row=0, column=1)
+
+        ctk.CTkLabel(self._inputs_content, text="Anthropic API Key:", width=120, anchor="w", text_color=COLORS["text_secondary"], font=ctk.CTkFont(family="Segoe UI", size=11)).grid(row=3, column=0, sticky="w", pady=8)
+        self.api_key_var = ctk.StringVar(value=os.environ.get("ANTHROPIC_API_KEY", ""))
+        ctk.CTkEntry(self._inputs_content, textvariable=self.api_key_var, show="•", placeholder_text="sk-ant-...", fg_color=COLORS["bg_input"], border_color=COLORS["border"], text_color=COLORS["text_primary"], font=ctk.CTkFont(family="Consolas", size=11), height=36).grid(row=3, column=1, sticky="ew", padx=(8, 0), pady=8)
+
+        ctk.CTkLabel(self._inputs_content, text="Output Folder:", width=120, anchor="w", text_color=COLORS["text_secondary"], font=ctk.CTkFont(family="Segoe UI", size=11)).grid(row=4, column=0, sticky="w", pady=8)
+        self.output_dir_var = ctk.StringVar()
+        output_frame = ctk.CTkFrame(self._inputs_content, fg_color="transparent")
+        output_frame.grid(row=4, column=1, sticky="ew", padx=(8, 0), pady=8)
+        output_frame.columnconfigure(0, weight=1)
+        ctk.CTkEntry(output_frame, textvariable=self.output_dir_var, fg_color=COLORS["bg_input"], border_color=COLORS["border"], text_color=COLORS["text_primary"], font=ctk.CTkFont(family="Consolas", size=11), height=36).grid(row=0, column=0, sticky="ew", padx=(0, 6))
+        self._create_secondary_button(output_frame, text="Browse...", command=self._browse_output_dir, width=90).grid(row=0, column=1)
+
+        self.run_btn = ctk.CTkButton(
+            main, text="Run Phase 2", command=self._run,
+            font=ctk.CTkFont(family="Segoe UI", size=14, weight="bold"),
+            height=44, corner_radius=8,
+            fg_color=COLORS["accent"], hover_color=COLORS["accent_hover"],
+        )
+        self.run_btn.pack(fill="x", pady=(0, 8))
+
+        self.progress_bar = ctk.CTkProgressBar(
+            main,
+            height=4,
+            corner_radius=2,
+            fg_color=COLORS["bg_input"],
+            progress_color=COLORS["accent"],
+            indeterminate_speed=0.5,
+        )
+        self.progress_bar.configure(mode="indeterminate")
+
+        self.status_label = ctk.CTkLabel(
+            main,
+            textvariable=self.status_var,
+            text_color=COLORS["text_secondary"],
+            anchor="e",
+            font=ctk.CTkFont(family="Segoe UI", size=11),
+        )
+        self.status_label.pack(fill="x", pady=(0, 12))
+
+        log_card = ctk.CTkFrame(main, fg_color=COLORS["bg_card"], corner_radius=8)
+        log_card.pack(fill="both", expand=True, pady=(0, 12))
+
+        log_header = ctk.CTkFrame(log_card, fg_color="transparent")
+        log_header.pack(fill="x", padx=16, pady=12)
+        log_header.bind("<Button-1>", self._toggle_log)
+
+        self._log_arrow = ctk.CTkLabel(log_header, text="▼", width=20, text_color=COLORS["text_muted"], font=ctk.CTkFont(family="Consolas", size=12))
+        self._log_arrow.pack(side="left")
+        self._log_arrow.bind("<Button-1>", self._toggle_log)
+
+        log_title = ctk.CTkLabel(log_header, text="ACTIVITY LOG", text_color=COLORS["text_muted"], font=ctk.CTkFont(family="Segoe UI", size=11, weight="bold"))
+        log_title.pack(side="left", padx=(4, 0))
+        log_title.bind("<Button-1>", self._toggle_log)
+
+        self.clear_log_btn = self._create_secondary_button(log_header, text="Clear", command=self._clear_log, width=80, height=30)
+        self.clear_log_btn.pack(side="right")
+
+        self._log_content = ctk.CTkFrame(log_card, fg_color="transparent")
+        self._log_content.pack(fill="both", expand=True, padx=16, pady=(0, 16))
+
+        self.log_text = ctk.CTkTextbox(
+            self._log_content,
+            fg_color=COLORS["bg_input"],
+            corner_radius=4,
+            font=ctk.CTkFont(family="Consolas", size=12),
+            text_color=COLORS["text_secondary"],
+            wrap="word",
+            state="disabled",
+            activate_scrollbars=True,
+        )
+        self.log_text.pack(fill="both", expand=True)
+
+        btn_frame = ctk.CTkFrame(self._log_content, fg_color="transparent")
+        btn_frame.pack(fill="x", pady=(10, 0))
+
+        self.open_output_btn = self._create_secondary_button(btn_frame, text="Open Output DOCX", command=self._open_output, state="disabled", width=160, height=32)
+        self.open_output_btn.pack(side="left", padx=(0, 8))
+
+        self.open_log_btn = self._create_secondary_button(btn_frame, text="Open Log", command=self._open_log, state="disabled", width=120, height=32)
+        self.open_log_btn.pack(side="left")
+
+    def _create_secondary_button(self, parent, text: str, command, width: int = 100, height: int = 36, state: str = "normal"):
+        return ctk.CTkButton(
+            parent,
+            text=text,
+            command=command,
+            width=width,
+            height=height,
+            state=state,
+            font=ctk.CTkFont(family="Segoe UI", size=12),
+            fg_color=COLORS["bg_input"],
+            hover_color=COLORS["border"],
+            border_width=1,
+            border_color=COLORS["border"],
+            text_color=COLORS["text_secondary"],
+        )
+
+    def _toggle_inputs(self, event=None):
+        if self._inputs_expanded:
+            self._inputs_content.pack_forget()
+            self._inputs_arrow.configure(text="▶")
+            self._inputs_expanded = False
         else:
-            self.target_label.config(text="Target Spec (.docx):")
+            self._inputs_content.pack(fill="x", padx=16, pady=(0, 16))
+            self._inputs_arrow.configure(text="▼")
+            self._inputs_expanded = True
+
+    def _toggle_log(self, event=None):
+        if self._log_expanded:
+            self._log_content.pack_forget()
+            self._log_arrow.configure(text="▶")
+            self._log_expanded = False
+        else:
+            self._log_content.pack(fill="both", expand=True, padx=16, pady=(0, 16))
+            self._log_arrow.configure(text="▼")
+            self._log_expanded = True
+
+    def _clear_log(self):
+        self.log_text.configure(state="normal")
+        self.log_text.delete("1.0", "end")
+        self.log_text.configure(state="disabled")
+
+    def _on_mode_change(self, _value=None):
+        if self._mode_var.get() == "Batch (folder)":
+            self.target_label.configure(text="Target Folder:")
+        else:
+            self.target_label.configure(text="Target Spec (.docx):")
         self.target_var.set("")
         self.output_dir_var.set("")
 
     def _browse_target(self):
-        if self.batch_var.get():
+        if self._mode_var.get() == "Batch (folder)":
             path = filedialog.askdirectory(title="Select folder with .docx files")
         else:
             path = filedialog.askopenfilename(
                 title="Select Target Spec",
-                filetypes=[("Word Documents", "*.docx"), ("All Files", "*.*")]
+                filetypes=[("Word Documents", "*.docx"), ("All Files", "*.*")],
             )
         if path:
             self.target_var.set(path)
-            if self.batch_var.get():
-                default_output = path
-            else:
-                default_output = str(Path(path).parent)
+            default_output = path if self._mode_var.get() == "Batch (folder)" else str(Path(path).parent)
             self.output_dir_var.set(default_output)
 
     def _browse_arch(self):
@@ -477,16 +469,16 @@ class Phase2GUI:
             self.output_dir_var.set(path)
 
     def _log(self, msg: str):
-        self.root.after(0, self._append_log, msg)
+        self.after(0, self._append_log, msg)
 
     def _append_log(self, msg: str):
-        self.log_text.config(state=tk.NORMAL)
-        self.log_text.insert(tk.END, msg + "\n")
-        self.log_text.see(tk.END)
-        self.log_text.config(state=tk.DISABLED)
+        self.log_text.configure(state="normal")
+        self.log_text.insert("end", msg + "\n")
+        self.log_text.see("end")
+        self.log_text.configure(state="disabled")
 
     def _set_status(self, status: str):
-        self.root.after(0, lambda: self.status_var.set(status))
+        self.after(0, lambda: self.status_var.set(status))
 
     def _validate_inputs(self) -> bool:
         if not self.target_var.get():
@@ -500,17 +492,11 @@ class Phase2GUI:
             return False
         arch_path = Path(self.arch_var.get())
         if not (arch_path / "arch_style_registry.json").exists():
-            messagebox.showerror("Error",
-                f"arch_style_registry.json not found in {arch_path}.\n"
-                "Make sure you selected the correct architect template folder.")
+            messagebox.showerror("Error", f"arch_style_registry.json not found in {arch_path}.\nMake sure you selected the correct architect template folder.")
             return False
         if not (arch_path / "arch_template_registry.json").exists():
-            messagebox.showerror("Error",
-                f"arch_template_registry.json not found in {arch_path}.\n"
-                "Make sure you selected the correct architect template folder.")
+            messagebox.showerror("Error", f"arch_template_registry.json not found in {arch_path}.\nMake sure you selected the correct architect template folder.")
             return False
-
-
         return True
 
     def _run(self):
@@ -520,22 +506,22 @@ class Phase2GUI:
             return
 
         self.processing = True
-        self.run_btn.config(state=tk.DISABLED)
-        self.open_output_btn.config(state=tk.DISABLED)
-        self.open_log_btn.config(state=tk.DISABLED)
-        self.progress.start(10)
+        self.output_path = None
+        self.log_path = None
+        self.run_btn.configure(text="Processing...", state="disabled", text_color_disabled="#FFFFFF")
+        self.open_output_btn.configure(state="disabled")
+        self.open_log_btn.configure(state="disabled")
+        self.progress_bar.pack(fill="x", pady=(0, 8), after=self.run_btn)
+        self.progress_bar.start()
 
-        # Clear log
-        self.log_text.config(state=tk.NORMAL)
-        self.log_text.delete("1.0", tk.END)
-        self.log_text.config(state=tk.DISABLED)
+        self._clear_log()
 
         thread = threading.Thread(target=self._process, daemon=True)
         thread.start()
 
     def _process(self):
         try:
-            if self.batch_var.get():
+            if self._mode_var.get() == "Batch (folder)":
                 self._process_batch()
             else:
                 self._process_single(Path(self.target_var.get()))
@@ -545,7 +531,7 @@ class Phase2GUI:
             import traceback
             self._log(traceback.format_exc())
         finally:
-            self.root.after(0, self._finish_processing)
+            self.after(0, self._finish_processing)
 
     def _process_single(self, docx_path: Path) -> Optional[Path]:
         """Process a single DOCX file. Returns output path on success."""
@@ -751,27 +737,33 @@ class Phase2GUI:
         self._set_status(f"Batch done: {ok_count}/{len(results)} OK")
 
     def _show_info_popup(self, title: str, content: str):
-        popup = tk.Toplevel(self.root)
+        popup = ctk.CTkToplevel(self)
         popup.title(title)
         popup.geometry("760x650")
         popup.minsize(640, 480)
-        popup.configure(bg=self.colors["bg_card"])
-        popup.transient(self.root)
+        popup.configure(fg_color=COLORS["bg_dark"])
+        popup.transient(self)
+        popup.grab_set()
+        popup.lift()
+        popup.focus_force()
 
-        frame = tk.Frame(popup, bg=self.colors["bg_card"], padx=16, pady=16)
-        frame.pack(fill=tk.BOTH, expand=True)
+        frame = ctk.CTkFrame(popup, fg_color=COLORS["bg_card"], corner_radius=8)
+        frame.pack(fill="both", expand=True, padx=16, pady=16)
+
+        text_frame = ctk.CTkFrame(frame, fg_color=COLORS["bg_input"], corner_radius=4)
+        text_frame.pack(fill="both", expand=True)
 
         text = scrolledtext.ScrolledText(
-            frame,
+            text_frame,
             wrap=tk.WORD,
             font=("Segoe UI", 10),
-            bg=self.colors["bg_input"],
-            fg=self.colors["text_primary"],
-            insertbackground=self.colors["text_primary"],
+            bg=COLORS["bg_input"],
+            fg=COLORS["text_primary"],
+            insertbackground=COLORS["text_primary"],
             relief=tk.FLAT,
             highlightthickness=1,
-            highlightbackground=self.colors["border"],
-            highlightcolor=self.colors["accent"],
+            highlightbackground=COLORS["border"],
+            highlightcolor=COLORS["accent"],
             padx=12,
             pady=12,
         )
@@ -779,7 +771,7 @@ class Phase2GUI:
         self._render_markdown(text, content)
         text.config(state=tk.DISABLED)
 
-        tk.Button(frame, text="Close", command=popup.destroy, **self.secondary_btn_style).pack(pady=(12, 0))
+        self._create_secondary_button(frame, text="Close", command=popup.destroy, width=100).pack(pady=(12, 0))
 
     def _render_markdown(self, widget: scrolledtext.ScrolledText, markdown_text: str) -> None:
         """Render a focused subset of Markdown into a Tk text widget."""
@@ -789,7 +781,7 @@ class Phase2GUI:
         widget.tag_configure("bold", font=("Segoe UI", 10, "bold"))
         widget.tag_configure("italic", font=("Segoe UI", 10, "italic"))
         widget.tag_configure("code", font=("Consolas", 10), background="#202020")
-        widget.tag_configure("hr", foreground=self.colors["text_muted"])
+        widget.tag_configure("hr", foreground=COLORS["text_muted"])
 
         for raw_line in markdown_text.splitlines():
             line = raw_line.rstrip("\n")
@@ -850,14 +842,28 @@ class Phase2GUI:
 
     def _finish_processing(self):
         self.processing = False
-        self.progress.stop()
-        self.run_btn.config(state=tk.NORMAL)
+        self.progress_bar.stop()
+        self.progress_bar.set(0)
+        self.progress_bar.pack_forget()
+        if self.status_var.get() == "Failed":
+            self._reset_run_button()
+        else:
+            self._on_processing_complete()
         if self.output_path:
-            self.open_output_btn.config(state=tk.NORMAL)
+            self.open_output_btn.configure(state="normal")
         if self.log_path:
-            self.open_log_btn.config(state=tk.NORMAL)
-        if not self.batch_var.get() and self.output_path:
+            self.open_log_btn.configure(state="normal")
+        if self._mode_var.get() != "Batch (folder)" and self.output_path:
             self._set_status("Done")
+
+    def _on_processing_complete(self):
+        self.run_btn.configure(text="✓ Complete", fg_color=COLORS["success"], hover_color=COLORS["success_glow"], state="disabled")
+        self.after(2500, self._reset_run_button)
+
+    def _reset_run_button(self):
+        if self.processing:
+            return
+        self.run_btn.configure(text="Run Phase 2", fg_color=COLORS["accent"], hover_color=COLORS["accent_hover"], state="normal")
 
     def _open_output(self):
         if self.output_path and self.output_path.exists():
@@ -880,9 +886,9 @@ class Phase2GUI:
 
 
 def main():
-    root = tk.Tk()
-    Phase2GUI(root)
-    root.mainloop()
+    ctk.set_appearance_mode("dark")
+    ctk.set_default_color_theme("blue")
+    Phase2GUI().mainloop()
 
 
 if __name__ == "__main__":
