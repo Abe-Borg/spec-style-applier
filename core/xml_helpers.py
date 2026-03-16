@@ -180,7 +180,7 @@ def strip_run_font_formatting(p_xml: str) -> str:
     return result
 
 
-_DIRECT_PPR_OVERRIDE_TAGS = ("jc", "ind", "spacing")
+_DIRECT_PPR_OVERRIDE_TAGS = ("jc", "ind", "spacing", "numPr")
 
 
 def strip_conflicting_direct_ppr(p_xml: str) -> str:
@@ -191,8 +191,9 @@ def strip_conflicting_direct_ppr(p_xml: str) -> str:
     - <w:jc>
     - <w:ind>
     - <w:spacing>
+    - <w:numPr>
 
-    Preserves numbering, section properties, and other pPr children.
+    Preserves section properties and other unrelated pPr children.
     """
     if "<w:sectPr" in p_xml:
         return p_xml

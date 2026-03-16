@@ -19,7 +19,6 @@ from core.xml_helpers import (
     strip_run_font_formatting,
     strip_conflicting_direct_ppr,
 )
-from core.style_import import ensure_explicit_numpr_from_current_style
 
 
 def _load_prompt_text(filename: str) -> str:
@@ -460,7 +459,8 @@ def _normalize_paragraph_for_contract(p_xml: str) -> str:
     out = p_xml
     # Strip pStyle (we change this)
     out = re.sub(r"<w:pStyle\b[^>]*/>", "", out)
-    # Strip numPr (we may materialize this)
+    # Strip numPr (inline numbering overrides are allowed to change)
+    out = re.sub(r"<w:numPr\b[^>]*/>", "", out)
     out = re.sub(r"<w:numPr\b[^>]*>[\s\S]*?</w:numPr>", "", out, flags=re.S)
     # Strip direct pPr overrides now allowed to be removed during apply
     out = re.sub(r"<w:jc\b[^>]*/>", "", out)
@@ -498,7 +498,7 @@ def apply_phase2_classifications(
     doc_path = extract_dir / "word" / "document.xml"
     doc_text = doc_path.read_text(encoding="utf-8")
 
-    # Load styles once so we can preserve style-linked numbering before swapping styles
+    # Load styles once so we can verify architect style IDs exist in target styles.xml
     styles_xml_text = (extract_dir / "word" / "styles.xml").read_text(encoding="utf-8")
     style_ids_in_styles = set(re.findall(r'w:styleId="([^"]+)"', styles_xml_text))
 
@@ -547,11 +547,9 @@ def apply_phase2_classifications(
             log.append(f"Skipped sectPr paragraph at index {idx}")
             continue
 
-        # Preserve list continuation by materializing style-linked numPr *before* swapping styles.
         pb = para_blocks[idx]
-        pb = ensure_explicit_numpr_from_current_style(pb, styles_xml_text)
 
-        # Strip direct paragraph-level layout overrides that beat paragraph styles
+        # Strip direct paragraph-level overrides that beat paragraph styles
         pb = strip_conflicting_direct_ppr(pb)
 
         # Strip run-level font formatting so style fonts take effect
@@ -563,7 +561,7 @@ def apply_phase2_classifications(
 
     # Log summary
     log.append(f"Applied styles to {len(modified_indices)} paragraphs")
-    log.append(f"Removed direct paragraph layout overrides (jc/ind/spacing) from modified paragraphs")
+    log.append(f"Removed direct paragraph overrides (jc/ind/spacing/numPr) from modified paragraphs")
     log.append(f"Stripped run-level font formatting from modified paragraphs")
 
     # Enforce the diff contract.
