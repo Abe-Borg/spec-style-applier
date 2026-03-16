@@ -1,6 +1,7 @@
 import base64
 from pathlib import Path
 
+from core.xml_helpers import iter_paragraph_xml_blocks
 from header_footer_importer import import_headers_footers
 
 
@@ -10,7 +11,7 @@ def _seed_extract(tmp_path: Path) -> Path:
         '<?xml version="1.0" encoding="UTF-8"?>'
         '<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" '
         'xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">'
-        '<w:body><w:p/><w:sectPr><w:pgSz w:w="12240" w:h="15840"/></w:sectPr></w:body></w:document>',
+        '<w:body><w:p><w:r><w:t>x</w:t></w:r></w:p><w:sectPr><w:pgSz w:w="12240" w:h="15840"/></w:sectPr></w:body></w:document>',
         encoding="utf-8",
     )
     (tmp_path / "word" / "_rels" / "document.xml.rels").write_text(
@@ -83,6 +84,9 @@ def test_import_headers_footers_replaces_parts_and_refs(tmp_path):
     doc_xml = (extract / "word" / "document.xml").read_text(encoding="utf-8")
     assert "headerReference" in doc_xml
     assert "footerReference" in doc_xml
+    assert "<ns0:" not in doc_xml
+    assert "<w:p" in doc_xml
+    assert len(list(iter_paragraph_xml_blocks(doc_xml))) == 1
 
     ct_xml = (extract / "[Content_Types].xml").read_text(encoding="utf-8")
     assert "/word/header1.xml" in ct_xml

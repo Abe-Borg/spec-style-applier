@@ -6,10 +6,15 @@ import xml.etree.ElementTree as ET
 from pathlib import Path
 from typing import Any, Dict, List, Tuple
 
-W_NS = "http://schemas.openxmlformats.org/wordprocessingml/2006/main"
-R_NS = "http://schemas.openxmlformats.org/officeDocument/2006/relationships"
-PKG_REL_NS = "http://schemas.openxmlformats.org/package/2006/relationships"
-CT_NS = "http://schemas.openxmlformats.org/package/2006/content-types"
+from core.ooxml_namespaces import (
+    CT_NS,
+    PKG_REL_NS,
+    R_NS,
+    W_NS,
+    serialize_content_types,
+    serialize_package_relationships,
+    serialize_wordprocessingml,
+)
 
 
 def _iter_hf_entries(registry: Dict[str, Any]) -> List[Tuple[str, Dict[str, Any]]]:
@@ -133,7 +138,7 @@ def _rebuild_document_rels(target_extract_dir: Path, part_to_type: Dict[str, str
         ET.SubElement(root, f"{{{PKG_REL_NS}}}Relationship", {"Id": rid, "Type": rel_type, "Target": target})
         part_to_rid[part_name] = rid
 
-    rels_path.write_bytes(ET.tostring(root, encoding="utf-8", xml_declaration=True))
+    rels_path.write_bytes(serialize_package_relationships(root))
     log.append(f"Rebuilt document.xml.rels header/footer relationships ({len(part_to_rid)} entries)")
     return part_to_rid
 
@@ -180,7 +185,9 @@ def _rewire_document_sectpr(target_extract_dir: Path, registry: Dict[str, Any], 
 
     rid_to_part = _build_arch_rid_to_part(entries)
 
-    root = ET.fromstring(doc_path.read_bytes())
+    doc_original = doc_path.read_text(encoding="utf-8")
+    had_w_prefix = "<w:" in doc_original
+    root = ET.fromstring(doc_original.encode("utf-8"))
     sectprs = root.findall(f".//{{{W_NS}}}sectPr")
     if not sectprs:
         log.append("No sectPr blocks found; skipped header/footer rewiring")
@@ -228,7 +235,10 @@ def _rewire_document_sectpr(target_extract_dir: Path, registry: Dict[str, Any], 
             anchor = len(insert_nodes)
             sectpr.insert(anchor, ET.Element(f"{{{W_NS}}}titlePg"))
 
-    doc_path.write_bytes(ET.tostring(root, encoding="utf-8", xml_declaration=True))
+    serialized = serialize_wordprocessingml(root)
+    if had_w_prefix and b"<w:" not in serialized:
+        raise RuntimeError("document.xml serialization dropped w: prefixes")
+    doc_path.write_bytes(serialized)
     log.append(f"Rewired sectPr header/footer references in {len(sectprs)} sections")
 
 
@@ -284,7 +294,7 @@ def _ensure_content_types(target_extract_dir: Path, part_to_type: Dict[str, str]
             ET.SubElement(root, f"{{{CT_NS}}}Default", {"Extension": ext, "ContentType": content_type})
             existing_defaults.add(marker)
 
-    ct_path.write_bytes(ET.tostring(root, encoding="utf-8", xml_declaration=True))
+    ct_path.write_bytes(serialize_content_types(root))
     log.append("Updated [Content_Types].xml for header/footer parts and media")
 
 

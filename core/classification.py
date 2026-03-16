@@ -5,6 +5,7 @@ building slim bundles for LLM input, and boilerplate filtering.
 
 import re
 import difflib
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Dict, Any, List, Optional, Set, Tuple
 
@@ -488,7 +489,7 @@ def apply_phase2_classifications(
     classifications: Dict[str, Any],
     arch_style_registry: Dict[str, str],
     log: List[str]
-) -> None:
+) -> "ApplyReport":
     """
     Apply CSI role classifications to paragraphs by setting pStyle.
 
@@ -505,8 +506,7 @@ def apply_phase2_classifications(
     blocks = list(iter_paragraph_xml_blocks(doc_text))
     para_blocks = [b[2] for b in blocks]
 
-    # Track which paragraphs we modify (for logging)
-    modified_indices = set()
+    report = ApplyReport(requested=0)
 
     # Contract check: normalize paragraphs for comparison
     contract_before = [_normalize_paragraph_for_contract(p) for p in para_blocks]
@@ -514,55 +514,75 @@ def apply_phase2_classifications(
     items = classifications.get("classifications", [])
     if not isinstance(items, list):
         raise ValueError("phase2 classifications: 'classifications' must be a list")
+    report.requested = len(items)
+
+    style_xml_by_id = _build_style_xml_map(styles_xml_text)
 
     for item in items:
         if not isinstance(item, dict):
-            log.append(f"Invalid classification entry (not object): {item!r}")
-            continue
+            raise ValueError(f"Invalid classification entry (not object): {item!r}")
 
         idx = item.get("paragraph_index")
         role = item.get("csi_role")
 
         if not isinstance(idx, int) or idx < 0 or idx >= len(para_blocks):
-            log.append(f"Invalid paragraph_index in classifications: {idx!r}")
+            report.invalid_indices.append(idx)
             continue
 
         if not isinstance(role, str):
-            log.append(f"Invalid csi_role type at paragraph {idx}: {role!r}")
-            continue
+            raise ValueError(f"Invalid csi_role type at paragraph {idx}: {role!r}")
 
         style_id = arch_style_registry.get(role)
         if not style_id:
-            log.append(f"Unmapped CSI role '{role}' at paragraph {idx} (skipped)")
+            report.unmapped_roles.append((idx, role))
             continue
 
         if style_id not in style_ids_in_styles:
-            raise ValueError(
-                f"Phase 2 needs styleId '{style_id}' for role '{role}' at paragraph {idx}, "
-                "but that styleId is not present in target word/styles.xml. "
-                "Import failed or registry mismatch."
-            )
+            report.missing_style_ids.add(style_id)
+            continue
 
         if paragraph_contains_sectpr(para_blocks[idx]):
-            log.append(f"Skipped sectPr paragraph at index {idx}")
+            report.skipped_sectpr.append(idx)
             continue
 
         pb = para_blocks[idx]
 
-        # Strip direct paragraph-level overrides that beat paragraph styles
-        pb = strip_conflicting_direct_ppr(pb)
+        style_xml = style_xml_by_id.get(style_id, "")
+        if _style_has_replacement_ppr(style_xml):
+            pb = strip_conflicting_direct_ppr(pb)
+            report.stripped_direct_ppr += 1
+        else:
+            report.preserved_direct_ppr += 1
 
         # Strip run-level font formatting so style fonts take effect
         pb = strip_run_font_formatting(pb)
+        report.stripped_run_fonts += 1
 
         # Now safely swap pStyle
         para_blocks[idx] = apply_pstyle_to_paragraph_block(pb, style_id)
-        modified_indices.add(idx)
+        report.modified += 1
 
-    # Log summary
-    log.append(f"Applied styles to {len(modified_indices)} paragraphs")
-    log.append(f"Removed direct paragraph overrides (jc/ind/spacing/numPr) from modified paragraphs")
-    log.append(f"Stripped run-level font formatting from modified paragraphs")
+    if report.invalid_indices:
+        raise ValueError(f"Invalid paragraph indices: {report.invalid_indices[:20]}")
+    if report.missing_style_ids:
+        raise ValueError(f"Missing style IDs in target styles.xml: {sorted(report.missing_style_ids)}")
+    if report.unmapped_roles:
+        preview = report.unmapped_roles[:10]
+        raise ValueError(f"Unmapped roles encountered: {preview}")
+    expected_targetable = report.requested - len(report.skipped_sectpr)
+    if expected_targetable > 0 and report.modified == 0:
+        raise ValueError("Applied styles to 0 paragraphs despite non-empty targetable classifications")
+    if report.modified != expected_targetable:
+        raise ValueError(
+            f"Applied styles to {report.modified}/{expected_targetable} targetable paragraphs"
+        )
+
+    log.append(f"Applied styles to {report.modified} paragraphs")
+    log.append(
+        "Direct paragraph overrides stripped/preserved: "
+        f"{report.stripped_direct_ppr}/{report.preserved_direct_ppr}"
+    )
+    log.append(f"Stripped run-level font formatting from {report.stripped_run_fonts} paragraphs")
 
     # Enforce the diff contract.
     contract_after = [_normalize_paragraph_for_contract(p) for p in para_blocks]
@@ -592,3 +612,33 @@ def apply_phase2_classifications(
         last = e
     out.append(doc_text[last:])
     doc_path.write_text("".join(out), encoding="utf-8")
+    return report
+
+
+@dataclass
+class ApplyReport:
+    requested: int
+    modified: int = 0
+    invalid_indices: List[Any] = field(default_factory=list)
+    skipped_sectpr: List[int] = field(default_factory=list)
+    unmapped_roles: List[Tuple[int, str]] = field(default_factory=list)
+    missing_style_ids: Set[str] = field(default_factory=set)
+    stripped_direct_ppr: int = 0
+    preserved_direct_ppr: int = 0
+    stripped_run_fonts: int = 0
+
+
+def _build_style_xml_map(styles_xml_text: str) -> Dict[str, str]:
+    out: Dict[str, str] = {}
+    for match in re.finditer(r'(<w:style\b[^>]*w:styleId="([^"]+)"[^>]*>[\s\S]*?</w:style>)', styles_xml_text):
+        out[match.group(2)] = match.group(1)
+    return out
+
+
+def _style_has_replacement_ppr(style_block_xml: str) -> bool:
+    if not style_block_xml:
+        return False
+    return any(
+        tag in style_block_xml
+        for tag in ("<w:spacing", "<w:ind", "<w:jc", "<w:numPr", "<w:tabs", "<w:outlineLvl")
+    )

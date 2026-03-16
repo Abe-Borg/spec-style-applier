@@ -53,7 +53,7 @@ def build_batch_requests(
                     "params": {
                         "model": model,
                         "max_tokens": 128000,
-                        "temperature": 1,
+                        "temperature": 0,
                         "thinking": {"type": "adaptive"},
                         "output_config": {"effort": "high"},
                         "system": PHASE2_MASTER_PROMPT.strip(),
