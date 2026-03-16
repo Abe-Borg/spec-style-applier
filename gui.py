@@ -24,6 +24,7 @@ from batch_runner import (
     BatchResult,
     load_and_validate_shared_config,
     process_single_file,
+    run_batch_api,
     run_batch_concurrent,
 )
 
@@ -199,6 +200,7 @@ class Phase2GUI(ctk.CTk):
 
         self._mode_var = ctk.StringVar(value="Single File")
         self._workers_var = ctk.StringVar(value="3")
+        self._use_batch_api_var = ctk.BooleanVar(value=False)
         self.status_var = ctk.StringVar(value="Ready")
         self._inputs_expanded = True
         self._log_expanded = True
@@ -335,6 +337,17 @@ class Phase2GUI(ctk.CTk):
             dropdown_text_color=COLORS["text_primary"],
         )
 
+        self.batch_api_checkbox = ctk.CTkCheckBox(
+            self._inputs_content,
+            text="Use Batch API (50% cost savings)",
+            variable=self._use_batch_api_var,
+            command=self._update_run_button_text,
+            font=ctk.CTkFont(family="Segoe UI", size=11),
+            text_color=COLORS["text_secondary"],
+            fg_color=COLORS["accent"],
+            hover_color=COLORS["accent_hover"],
+        )
+
         self.run_btn = ctk.CTkButton(
             main, text="Run Phase 2", command=self._run,
             font=ctk.CTkFont(family="Segoe UI", size=14, weight="bold"),
@@ -453,11 +466,26 @@ class Phase2GUI(ctk.CTk):
         if is_batch:
             self.workers_label.grid(row=5, column=0, sticky="w", pady=8)
             self.workers_menu.grid(row=5, column=1, sticky="w", padx=(8, 0), pady=8)
+            self.batch_api_checkbox.grid(row=6, column=1, sticky="w", padx=(8, 0), pady=(0, 8))
         else:
             self.workers_label.grid_remove()
             self.workers_menu.grid_remove()
+            self.batch_api_checkbox.grid_remove()
+            self._use_batch_api_var.set(False)
         self.target_var.set("")
         self.output_dir_var.set("")
+        if is_batch and self._use_batch_api_var.get():
+            self.run_btn.configure(text="Submit Batch")
+        else:
+            self.run_btn.configure(text="Run Phase 2")
+
+    def _update_run_button_text(self):
+        if self.processing:
+            return
+        if self._mode_var.get() == "Batch (folder)" and self._use_batch_api_var.get():
+            self.run_btn.configure(text="Submit Batch")
+        else:
+            self.run_btn.configure(text="Run Phase 2")
 
     def _browse_target(self):
         if self._mode_var.get() == "Batch (folder)":
@@ -578,7 +606,7 @@ class Phase2GUI(ctk.CTk):
         return result.output_path
 
     def _process_batch(self):
-        """Process all .docx files in a folder concurrently."""
+        """Process all .docx files in a folder."""
         folder = Path(self.target_var.get())
         docx_files = sorted(folder.glob("*.docx"))
 
@@ -610,17 +638,51 @@ class Phase2GUI(ctk.CTk):
 
             self.after(0, _on_main_thread)
 
-        results = run_batch_concurrent(
-            docx_paths=docx_files,
-            arch_registry=shared.arch_registry,
-            env_registry=shared.env_registry,
-            arch_styles_xml=shared.arch_styles_xml,
-            available_roles=shared.available_roles,
-            api_key=self.api_key_var.get(),
-            output_dir=Path(self.output_dir_var.get()),
-            max_workers=int(self._workers_var.get()),
-            on_file_complete=handle_result,
-        )
+        use_batch_api = self._use_batch_api_var.get()
+        if use_batch_api:
+            self._log("Phase A: Preparing files...")
+            self._set_status("Phase A: preparing files")
+            self.progress_bar.configure(mode="indeterminate")
+            self.progress_bar.start()
+
+            def on_batch_poll(batch_id: str, processing_status: str, request_counts):
+                completed = getattr(request_counts, "succeeded", 0) + getattr(request_counts, "errored", 0) + getattr(request_counts, "canceled", 0) + getattr(request_counts, "expired", 0)
+                total_requests = getattr(request_counts, "processing", 0) + completed
+                msg = f"Phase B: polling {batch_id} ({completed}/{total_requests} complete)"
+                self._set_status(msg)
+                self._log(msg)
+
+            self._log("Phase B: submitting Anthropic batch...")
+            results = run_batch_api(
+                docx_paths=docx_files,
+                arch_registry=shared.arch_registry,
+                env_registry=shared.env_registry,
+                arch_styles_xml=shared.arch_styles_xml,
+                available_roles=shared.available_roles,
+                api_key=self.api_key_var.get(),
+                output_dir=Path(self.output_dir_var.get()),
+                max_workers=int(self._workers_var.get()),
+                on_file_complete=handle_result,
+                on_batch_poll=on_batch_poll,
+            )
+            self.progress_bar.stop()
+            self.progress_bar.configure(mode="determinate")
+            self.progress_bar.set(0)
+            self._log("Phase C: applying results...")
+        else:
+            self.progress_bar.configure(mode="determinate")
+            self.progress_bar.set(0)
+            results = run_batch_concurrent(
+                docx_paths=docx_files,
+                arch_registry=shared.arch_registry,
+                env_registry=shared.env_registry,
+                arch_styles_xml=shared.arch_styles_xml,
+                available_roles=shared.available_roles,
+                api_key=self.api_key_var.get(),
+                output_dir=Path(self.output_dir_var.get()),
+                max_workers=int(self._workers_var.get()),
+                on_file_complete=handle_result,
+            )
 
         ok_count = sum(1 for item in results if item.success)
         self._log("=" * 60)
@@ -759,7 +821,8 @@ class Phase2GUI(ctk.CTk):
     def _reset_run_button(self):
         if self.processing:
             return
-        self.run_btn.configure(text="Run Phase 2", fg_color=COLORS["accent"], hover_color=COLORS["accent_hover"], state="normal")
+        self.run_btn.configure(fg_color=COLORS["accent"], hover_color=COLORS["accent_hover"], state="normal")
+        self._update_run_button_text()
 
     def _open_output(self):
         if self.output_path and self.output_path.exists():
