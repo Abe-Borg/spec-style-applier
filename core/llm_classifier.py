@@ -8,6 +8,7 @@ with retry logic, chunking for large documents, and coverage reporting.
 import json
 import time
 import re
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Dict, Any, List, Set
 
 from core.classification import (
@@ -152,9 +153,9 @@ def classify_target_document(slim_bundle: dict, available_roles: list, api_key: 
 
     client = anthropic.Anthropic(api_key=api_key)
     chunks = _split_bundle_into_chunks(slim_bundle)
-    chunk_results = []
+    chunk_results: List[dict] = [None] * len(chunks)
 
-    for i, chunk in enumerate(chunks):
+    def _classify_chunk(i: int, chunk: dict) -> dict:
         if len(chunks) > 1:
             print(f"  Processing chunk {i + 1}/{len(chunks)}...")
 
@@ -179,8 +180,7 @@ def classify_target_document(slim_bundle: dict, available_roles: list, api_key: 
                     for p in chunk.get("paragraphs", [])
                     if isinstance(p, dict) and isinstance(p.get("paragraph_index"), int)
                 }
-                chunk_results.append(_validate_classifications(parsed, available_roles, allowed_indices))
-                break
+                return _validate_classifications(parsed, available_roles, allowed_indices)
             except json.JSONDecodeError as e:
                 if attempt < max_retries:
                     print(f"  JSON parse error, retrying ({attempt + 1}/{max_retries})...")
@@ -194,6 +194,21 @@ def classify_target_document(slim_bundle: dict, available_roles: list, api_key: 
                     time.sleep(wait)
                 else:
                     raise RuntimeError(f"LLM classification failed after {max_retries + 1} attempts: {e}")
+
+        raise RuntimeError("Unexpected chunk classification exit without result")
+
+    if len(chunks) == 1:
+        chunk_results[0] = _classify_chunk(0, chunks[0])
+    else:
+        max_workers = min(len(chunks), 6)
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            futures = {
+                executor.submit(_classify_chunk, i, chunk): i
+                for i, chunk in enumerate(chunks)
+            }
+            for future in as_completed(futures):
+                i = futures[future]
+                chunk_results[i] = future.result()
 
     llm_only = chunk_results[0] if len(chunk_results) == 1 else _merge_chunk_results(chunk_results)
     result = coerce_to_final_classifications(slim_bundle, llm_only, available_roles)

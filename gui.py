@@ -9,19 +9,23 @@ and batch processing modes.
 
 import os
 import sys
-import json
 import re
 import threading
-import zipfile
 import subprocess
 from pathlib import Path
-from typing import Optional, List
+from typing import Optional
 
 import tkinter as tk
 from tkinter import filedialog, messagebox, scrolledtext
 
 import customtkinter as ctk
 
+from batch_runner import (
+    BatchResult,
+    load_and_validate_shared_config,
+    process_single_file,
+    run_batch_concurrent,
+)
 
 COLORS = {
     "bg_dark": "#0D0D0D",
@@ -106,7 +110,7 @@ If your document's paragraphs can all be classified deterministically (which is 
 
 ## Batch Mode
 
-Batch mode runs the same process on every `.docx` file in a folder, one at a time. This is useful when you have a full set of spec sections to reformat for a project. Each file is processed independently and gets its own formatted output.
+Batch mode runs the same process on every `.docx` file in a folder with configurable concurrency. This is useful when you have a full set of spec sections to reformat for a project. Each file is processed independently and gets its own formatted output.
 
 ---
 
@@ -164,7 +168,7 @@ If anything went wrong, click **Open Log** to see a detailed record of what the 
 
 **3.** Fill in the architect template folder, API key, and discipline as above.
 
-**4.** Click **Run Phase 2**. The tool processes each file in sequence. The log shows per-file results and a summary at the end.
+**4.** Click **Run Phase 2**. The tool processes files concurrently based on the worker count. The log shows per-file results and a summary at the end.
 
 Output files are placed in the selected output folder (defaults to the input folder), each named `<original_filename>_PHASE2_FORMATTED.docx`.
 
@@ -179,18 +183,6 @@ Output files are placed in the selected output folder (defaults to the input fol
 """
 
 
-def _check_numbering_module_needed(arch_styles_xml: str, needed_style_ids: list) -> None:
-    """Raise if styles need numbering but numbering_importer is unavailable."""
-    import re
-    for sid in needed_style_ids:
-        pat = r'<w:style[^>]*w:styleId="' + re.escape(sid) + r'"[^>]*>[\s\S]*?</w:style>'
-        m = re.search(pat, arch_styles_xml)
-        if m and '<w:numId' in m.group(0):
-            raise ImportError(
-                "numbering_importer module is not available but imported styles "
-                f"require numbering definitions (e.g. style '{sid}'). "
-                "Ensure numbering_importer.py is on the Python path."
-            )
 
 
 class Phase2GUI(ctk.CTk):
@@ -206,6 +198,7 @@ class Phase2GUI(ctk.CTk):
         self.log_path: Optional[Path] = None
 
         self._mode_var = ctk.StringVar(value="Single File")
+        self._workers_var = ctk.StringVar(value="3")
         self.status_var = ctk.StringVar(value="Ready")
         self._inputs_expanded = True
         self._log_expanded = True
@@ -328,6 +321,20 @@ class Phase2GUI(ctk.CTk):
         ctk.CTkEntry(output_frame, textvariable=self.output_dir_var, fg_color=COLORS["bg_input"], border_color=COLORS["border"], text_color=COLORS["text_primary"], font=ctk.CTkFont(family="Consolas", size=11), height=36).grid(row=0, column=0, sticky="ew", padx=(0, 6))
         self._create_secondary_button(output_frame, text="Browse...", command=self._browse_output_dir, width=90).grid(row=0, column=1)
 
+        self.workers_label = ctk.CTkLabel(self._inputs_content, text="Concurrent Files:", width=120, anchor="w", text_color=COLORS["text_secondary"], font=ctk.CTkFont(family="Segoe UI", size=11))
+        self.workers_menu = ctk.CTkOptionMenu(
+            self._inputs_content,
+            values=[str(i) for i in range(1, 7)],
+            variable=self._workers_var,
+            width=100,
+            fg_color=COLORS["bg_input"],
+            button_color=COLORS["border"],
+            button_hover_color=COLORS["accent_hover"],
+            text_color=COLORS["text_primary"],
+            dropdown_fg_color=COLORS["bg_input"],
+            dropdown_text_color=COLORS["text_primary"],
+        )
+
         self.run_btn = ctk.CTkButton(
             main, text="Run Phase 2", command=self._run,
             font=ctk.CTkFont(family="Segoe UI", size=14, weight="bold"),
@@ -397,6 +404,8 @@ class Phase2GUI(ctk.CTk):
         self.open_log_btn = self._create_secondary_button(btn_frame, text="Open Log", command=self._open_log, state="disabled", width=120, height=32)
         self.open_log_btn.pack(side="left")
 
+        self._on_mode_change()
+
     def _create_secondary_button(self, parent, text: str, command, width: int = 100, height: int = 36, state: str = "normal"):
         return ctk.CTkButton(
             parent,
@@ -439,10 +448,14 @@ class Phase2GUI(ctk.CTk):
         self.log_text.configure(state="disabled")
 
     def _on_mode_change(self, _value=None):
-        if self._mode_var.get() == "Batch (folder)":
-            self.target_label.configure(text="Target Folder:")
+        is_batch = self._mode_var.get() == "Batch (folder)"
+        self.target_label.configure(text="Target Folder:" if is_batch else "Target Spec (.docx):")
+        if is_batch:
+            self.workers_label.grid(row=5, column=0, sticky="w", pady=8)
+            self.workers_menu.grid(row=5, column=1, sticky="w", padx=(8, 0), pady=8)
         else:
-            self.target_label.configure(text="Target Spec (.docx):")
+            self.workers_label.grid_remove()
+            self.workers_menu.grid_remove()
         self.target_var.set("")
         self.output_dir_var.set("")
 
@@ -513,7 +526,12 @@ class Phase2GUI(ctk.CTk):
         self.open_output_btn.configure(state="disabled")
         self.open_log_btn.configure(state="disabled")
         self.progress_bar.pack(fill="x", pady=(0, 8), after=self.run_btn)
-        self.progress_bar.start()
+        if self._mode_var.get() == "Batch (folder)":
+            self.progress_bar.configure(mode="determinate")
+            self.progress_bar.set(0)
+        else:
+            self.progress_bar.configure(mode="indeterminate")
+            self.progress_bar.start()
 
         self._clear_log()
 
@@ -539,206 +557,28 @@ class Phase2GUI(ctk.CTk):
         self._set_status(f"Processing: {docx_path.name}")
         self._log(f"Processing: {docx_path}")
 
-        from docx_decomposer import DocxDecomposer
-        from docx_patch import patch_docx
-        from arch_env_applier import apply_environment_to_target
-        from core.classification import (
-            PHASE2_MASTER_PROMPT, PHASE2_RUN_INSTRUCTION,
-            build_phase2_slim_bundle, apply_phase2_classifications,
-        )
-        from core.stability import snapshot_stability, verify_stability
-        from core.style_import import import_arch_styles_into_target
-        from core.registry import (
-            resolve_arch_extract_root, load_available_roles_from_registry,
-            load_arch_style_registry, write_phase2_preflight,
-        )
-        from core.llm_classifier import classify_target_document
-
-        try:
-            from numbering_importer import import_numbering
-            has_numbering = True
-        except ImportError:
-            has_numbering = False
-
-        arch_path = Path(self.arch_var.get())
-        api_key = self.api_key_var.get()
-        log: List[str] = []
-
-        # Extract
-        self._log("  Extracting DOCX...")
-        decomposer = DocxDecomposer(str(docx_path))
-        extract_dir = decomposer.extract(output_dir=Path("output") / f"{docx_path.stem}_extracted")
-
-        # Load registry
-        arch_registry = load_arch_style_registry(arch_path)
-        arch_root = resolve_arch_extract_root(arch_path)
-        available_roles = load_available_roles_from_registry(arch_path)
-        if not available_roles:
-            raise ValueError("Could not load architect registry")
-        self._log(f"  Available roles: {available_roles}")
-
-        # Build slim bundle
-        self._log("  Building slim bundle...")
-        bundle = build_phase2_slim_bundle(extract_dir, available_roles=available_roles)
-        unresolved = len(bundle.get("paragraphs", []))
-        deterministic = len(bundle.get("deterministic_classifications", []))
-        self._log(f"  Bundle: {unresolved} unresolved + {deterministic} deterministic = {unresolved + deterministic} total")
-
-        if unresolved > 0 and not api_key:
-            raise ValueError("Anthropic API key is required when unresolved paragraphs exist.")
-
-        # Classify
-        self._log(f"  Classifying with LLM...")
-        classifications = classify_target_document(
-            slim_bundle=bundle,
-            available_roles=available_roles,
-            api_key=api_key,
+        shared = load_and_validate_shared_config(Path(self.arch_var.get()))
+        result = process_single_file(
+            docx_path=docx_path,
+            arch_registry=shared.arch_registry,
+            env_registry=shared.env_registry,
+            arch_styles_xml=shared.arch_styles_xml,
+            available_roles=shared.available_roles,
+            api_key=self.api_key_var.get(),
+            output_dir=Path(self.output_dir_var.get()),
         )
 
-        # Save classifications
-        classifications_path = extract_dir / "phase2_classifications.json"
-        classifications_path.write_text(json.dumps(classifications, indent=2), encoding="utf-8")
-        self._log(f"  Classifications saved: {classifications_path}")
+        for line in result.log:
+            self._log(f"  {line}")
 
-        # Apply environment
-        arch_template_registry_path = arch_root / "arch_template_registry.json"
-        if not arch_template_registry_path.exists():
-            raise FileNotFoundError(
-                f"arch_template_registry.json not found at {arch_template_registry_path}. "
-                "Phase 2 cannot proceed without the template registry."
-            )
-        env_registry = json.loads(arch_template_registry_path.read_text(encoding="utf-8"))
+        if not result.success:
+            raise RuntimeError(result.error or "Unknown processing error")
 
-        # Preflight contract validation — abort before any mutation
-        from core.registry import preflight_validate_registries
-        preflight_errors = preflight_validate_registries(arch_registry, env_registry)
-        if preflight_errors:
-            error_report = "\n".join(f"  - {e}" for e in preflight_errors)
-            raise ValueError(
-                f"Preflight validation failed ({len(preflight_errors)} error(s)):\n{error_report}"
-            )
-
-        apply_environment_to_target(target_extract_dir=extract_dir, registry=env_registry, log=log)
-        self._log("  Applied environment")
-
-        # Build synthetic styles.xml from registry (no disk dependency on arch extracted folder)
-        from core.registry import build_arch_styles_xml_from_registry
-        arch_styles_xml = build_arch_styles_xml_from_registry(env_registry)
-
-        # Import styles
-        used_roles = {
-            item.get("csi_role")
-            for item in classifications.get("classifications", [])
-            if isinstance(item, dict) and isinstance(item.get("csi_role"), str)
-        }
-        needed_style_ids = sorted({arch_registry[r] for r in used_roles if r in arch_registry})
-
-        # Import numbering
-        style_numid_remap = {}
-        if has_numbering:
-            style_numid_remap = import_numbering(
-                target_extract_dir=extract_dir,
-                arch_template_registry=env_registry,
-                arch_styles_xml=arch_styles_xml,
-                style_ids_to_import=needed_style_ids,
-                log=log
-            )
-        else:
-            # Check whether numbering is actually needed before silently skipping
-            _check_numbering_module_needed(arch_styles_xml, needed_style_ids)
-
-        import_arch_styles_into_target(
-            target_extract_dir=extract_dir,
-            arch_styles_xml=arch_styles_xml,
-            needed_style_ids=needed_style_ids,
-            log=log,
-            style_numid_remap=style_numid_remap
-        )
-        self._log(f"  Imported {len(needed_style_ids)} styles")
-
-        # Snapshot + apply + verify
-        snap = snapshot_stability(extract_dir)
-        apply_phase2_classifications(
-            extract_dir=extract_dir,
-            classifications=classifications,
-            arch_style_registry=arch_registry,
-            log=log
-        )
-        verify_stability(extract_dir, snap)
-        self._log("  Applied classifications, stability verified")
-
-        # Patch output
-        output_dir = Path(self.output_dir_var.get())
-        output_dir.mkdir(parents=True, exist_ok=True)
-        output_docx_path = output_dir / (docx_path.stem + "_PHASE2_FORMATTED.docx")
-        replacements = {
-            "word/document.xml": (extract_dir / "word" / "document.xml").read_bytes(),
-            "word/styles.xml": (extract_dir / "word" / "styles.xml").read_bytes(),
-        }
-        for rel_path, local_path in [
-            ("word/theme/theme1.xml", extract_dir / "word" / "theme" / "theme1.xml"),
-            ("word/settings.xml", extract_dir / "word" / "settings.xml"),
-            ("word/fontTable.xml", extract_dir / "word" / "fontTable.xml"),
-            ("word/numbering.xml", extract_dir / "word" / "numbering.xml"),
-            ("[Content_Types].xml", extract_dir / "[Content_Types].xml"),
-            ("word/_rels/document.xml.rels", extract_dir / "word" / "_rels" / "document.xml.rels"),
-        ]:
-            if local_path.exists():
-                replacements[rel_path] = local_path.read_bytes()
-
-        for hf_path in sorted((extract_dir / "word").glob("header*.xml")):
-            replacements[f"word/{hf_path.name}"] = hf_path.read_bytes()
-        for hf_path in sorted((extract_dir / "word").glob("footer*.xml")):
-            replacements[f"word/{hf_path.name}"] = hf_path.read_bytes()
-
-        rels_dir = extract_dir / "word" / "_rels"
-        if rels_dir.exists():
-            for rels_path in sorted(rels_dir.glob("header*.xml.rels")):
-                replacements[f"word/_rels/{rels_path.name}"] = rels_path.read_bytes()
-            for rels_path in sorted(rels_dir.glob("footer*.xml.rels")):
-                replacements[f"word/_rels/{rels_path.name}"] = rels_path.read_bytes()
-
-        media_dir = extract_dir / "word" / "media"
-        if media_dir.exists():
-            for media_path in sorted(media_dir.iterdir()):
-                if media_path.is_file():
-                    replacements[f"word/media/{media_path.name}"] = media_path.read_bytes()
-
-        with zipfile.ZipFile(docx_path, "r") as z:
-            old_hf_parts = {
-                n for n in z.namelist()
-                if (n.startswith("word/header") or n.startswith("word/footer")) and n.endswith(".xml")
-            }
-            old_hf_rels = {
-                n for n in z.namelist()
-                if (n.startswith("word/_rels/header") or n.startswith("word/_rels/footer")) and n.endswith(".rels")
-            }
-        exclude_parts = (old_hf_parts | old_hf_rels) - set(replacements.keys())
-
-        patch_docx(
-            src_docx=docx_path,
-            out_docx=output_docx_path,
-            replacements=replacements,
-            exclude_parts=exclude_parts,
-        )
-
-        # Coverage
-        total = len(bundle.get("paragraphs", [])) + len(bundle.get("deterministic_classifications", []))
-        classified = len(classifications.get("classifications", []))
-        coverage = (classified / total * 100) if total > 0 else 100.0
-
-        self._log(f"  Output: {output_docx_path}")
-        self._log(f"  Coverage: {classified}/{total} ({coverage:.1f}%)")
-
-        issues_path = extract_dir / "phase2_issues.log"
-        issues_path.write_text("\n".join(log) + "\n", encoding="utf-8")
-
-        self.output_path = output_docx_path
-        self.log_path = issues_path
-        return output_docx_path
+        self.output_path = result.output_path
+        return result.output_path
 
     def _process_batch(self):
-        """Process all .docx files in a folder."""
+        """Process all .docx files in a folder concurrently."""
         folder = Path(self.target_var.get())
         docx_files = sorted(folder.glob("*.docx"))
 
@@ -750,24 +590,45 @@ class Phase2GUI(ctk.CTk):
         self._log(f"Batch mode: {len(docx_files)} files in {folder}")
         self._log("")
 
-        results = []
-        for i, docx_path in enumerate(docx_files, 1):
-            self._set_status(f"Batch {i}/{len(docx_files)}: {docx_path.name}")
-            try:
-                output = self._process_single(docx_path)
-                results.append((docx_path.name, "OK", output))
-                self._log("")
-            except Exception as e:
-                results.append((docx_path.name, f"FAILED: {e}", None))
-                self._log(f"  FAILED: {e}\n")
+        shared = load_and_validate_shared_config(Path(self.arch_var.get()))
+        total = len(docx_files)
+        state = {"completed": 0}
 
-        # Summary
+        def handle_result(result: BatchResult):
+            def _on_main_thread():
+                state["completed"] += 1
+                completed = state["completed"]
+                active = max(total - completed, 0)
+                self.progress_bar.set(completed / total)
+                self._set_status(f"Batch: {completed}/{total} complete, {active} active")
+
+                status_text = "OK" if result.success else "FAILED"
+                self._log(f"═══ [{completed}/{total}] {result.filename} — {result.duration_seconds:.1f}s — {status_text} ═══")
+                for line in result.log:
+                    self._log(f"  {line}")
+                self._log("")
+
+            self.after(0, _on_main_thread)
+
+        results = run_batch_concurrent(
+            docx_paths=docx_files,
+            arch_registry=shared.arch_registry,
+            env_registry=shared.env_registry,
+            arch_styles_xml=shared.arch_styles_xml,
+            available_roles=shared.available_roles,
+            api_key=self.api_key_var.get(),
+            output_dir=Path(self.output_dir_var.get()),
+            max_workers=int(self._workers_var.get()),
+            on_file_complete=handle_result,
+        )
+
+        ok_count = sum(1 for item in results if item.success)
         self._log("=" * 60)
         self._log("BATCH SUMMARY")
         self._log("=" * 60)
-        ok_count = sum(1 for _, s, _ in results if s == "OK")
-        for name, status, _ in results:
-            self._log(f"  {name}: {status}")
+        for item in results:
+            status = "OK" if item.success else f"FAILED: {item.error}"
+            self._log(f"  {item.filename}: {status}")
         self._log(f"\n  {ok_count}/{len(results)} files processed successfully")
         self._set_status(f"Batch done: {ok_count}/{len(results)} OK")
 

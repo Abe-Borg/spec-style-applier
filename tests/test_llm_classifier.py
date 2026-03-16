@@ -1,3 +1,5 @@
+import json
+import threading
 import types
 
 import pytest
@@ -71,3 +73,50 @@ def test_merge_chunk_results_conflict_raises():
             {"classifications": [{"paragraph_index": 4, "csi_role": "PART"}], "notes": []},
             {"classifications": [{"paragraph_index": 4, "csi_role": "ARTICLE"}], "notes": []},
         ])
+
+
+class _CountingMessages:
+    def __init__(self):
+        self.call_count = 0
+        self.lock = threading.Lock()
+
+    def stream(self, **kwargs):
+        with self.lock:
+            self.call_count += 1
+        content = kwargs["messages"][0]["content"]
+        json_start = content.rfind("\n\n{")
+        slim_bundle = json.loads(content[json_start + 2:])
+        classifications = [
+            {"paragraph_index": p["paragraph_index"], "csi_role": "PART"}
+            for p in slim_bundle.get("paragraphs", [])
+        ]
+        return _FakeStream(json.dumps({"classifications": classifications}))
+
+
+class _CountingClient:
+    def __init__(self):
+        self.messages = _CountingMessages()
+
+
+def test_chunk_classification_runs_all_chunks(monkeypatch):
+    fake = _CountingClient()
+    fake_anthropic = types.SimpleNamespace(Anthropic=lambda api_key: fake)
+    monkeypatch.setitem(__import__("sys").modules, "anthropic", fake_anthropic)
+
+    bundle = {
+        "paragraphs": [{"paragraph_index": i, "text": f"P{i}"} for i in range(8)],
+        "available_roles": ["PART"],
+        "deterministic_classifications": [],
+    }
+
+    from core import llm_classifier as lc
+
+    monkeypatch.setattr(lc, "_split_bundle_into_chunks", lambda slim_bundle: [
+        {"paragraphs": bundle["paragraphs"][:4]},
+        {"paragraphs": bundle["paragraphs"][4:]},
+    ])
+
+    result = classify_target_document(bundle, ["PART"], api_key="x", model="m")
+
+    assert fake.messages.call_count == 2
+    assert len(result["classifications"]) == 8
