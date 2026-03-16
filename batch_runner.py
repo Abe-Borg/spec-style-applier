@@ -67,6 +67,12 @@ class PreparedFile:
     prep_log: List[str]
 
 
+def _coverage_counts(bundle: Dict[str, Any], classifications: Dict[str, Any]) -> tuple[int, int, int]:
+    total = len(bundle.get("paragraphs", [])) + len(bundle.get("deterministic_classifications", []))
+    classified = len(classifications.get("classifications", []))
+    return classified, total, len(bundle.get("paragraphs", []))
+
+
 def _check_numbering_module_needed(arch_styles_xml: str, needed_style_ids: List[str]) -> None:
     """Raise if styles need numbering but numbering_importer is unavailable."""
     for sid in needed_style_ids:
@@ -185,7 +191,7 @@ def process_single_file(
         per_file_log.append(f"Imported {len(needed_style_ids)} styles")
 
         snap = snapshot_stability(extract_dir)
-        apply_phase2_classifications(
+        apply_report = apply_phase2_classifications(
             extract_dir=extract_dir,
             classifications=classifications,
             arch_style_registry=arch_registry,
@@ -250,11 +256,15 @@ def process_single_file(
             exclude_parts=exclude_parts,
         )
 
-        total = len(bundle.get("paragraphs", [])) + len(bundle.get("deterministic_classifications", []))
-        classified = len(classifications.get("classifications", []))
-        coverage = (classified / total * 100) if total > 0 else 100.0
+        classified, total, unresolved = _coverage_counts(bundle, classifications)
+        class_coverage = (classified / total * 100) if total > 0 else 100.0
+        expected_targetable = apply_report.requested - len(apply_report.skipped_sectpr)
+        app_coverage = (apply_report.modified / expected_targetable * 100) if expected_targetable > 0 else 100.0
         per_file_log.append(f"Output: {output_path}")
-        per_file_log.append(f"Coverage: {classified}/{total} ({coverage:.1f}%)")
+        per_file_log.append(f"Classification coverage: {classified}/{total} ({class_coverage:.1f}%)")
+        per_file_log.append(
+            f"Application coverage: {apply_report.modified}/{expected_targetable} ({app_coverage:.1f}%)"
+        )
 
         issues_path = extract_dir / "phase2_issues.log"
         issues_path.write_text("\n".join(per_file_log) + "\n", encoding="utf-8")
@@ -352,7 +362,7 @@ def _apply_batch_result(
         per_file_log.append(f"Imported {len(needed_style_ids)} styles")
 
         snap = snapshot_stability(prepared.extract_dir)
-        apply_phase2_classifications(
+        apply_report = apply_phase2_classifications(
             extract_dir=prepared.extract_dir,
             classifications=classifications,
             arch_style_registry=arch_registry,
@@ -417,11 +427,15 @@ def _apply_batch_result(
             exclude_parts=exclude_parts,
         )
 
-        total = len(prepared.bundle.get("paragraphs", [])) + len(prepared.bundle.get("deterministic_classifications", []))
-        classified = len(classifications.get("classifications", []))
-        coverage = (classified / total * 100) if total > 0 else 100.0
+        classified, total, unresolved = _coverage_counts(prepared.bundle, classifications)
+        class_coverage = (classified / total * 100) if total > 0 else 100.0
+        expected_targetable = apply_report.requested - len(apply_report.skipped_sectpr)
+        app_coverage = (apply_report.modified / expected_targetable * 100) if expected_targetable > 0 else 100.0
         per_file_log.append(f"Output: {output_path}")
-        per_file_log.append(f"Coverage: {classified}/{total} ({coverage:.1f}%)")
+        per_file_log.append(f"Classification coverage: {classified}/{total} ({class_coverage:.1f}%)")
+        per_file_log.append(
+            f"Application coverage: {apply_report.modified}/{expected_targetable} ({app_coverage:.1f}%)"
+        )
 
         issues_path = prepared.extract_dir / "phase2_issues.log"
         issues_path.write_text("\n".join(per_file_log) + "\n", encoding="utf-8")
