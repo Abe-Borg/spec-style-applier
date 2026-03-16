@@ -85,3 +85,46 @@ class TestPatchDocxXmlValidation:
             replacements={"word/document.xml": b"<w:document" + _W_NS + b"><w:body/></w:document>"},
         )
         assert out.exists()
+
+
+class TestPatchDocxHeaderFooterSupport:
+    def _make_minimal_docx(self, path: Path) -> None:
+        with zipfile.ZipFile(path, "w") as zf:
+            zf.writestr("word/document.xml", b"<w:document" + _W_NS + b"/>")
+
+    def _make_docx_with_header(self, path: Path) -> None:
+        with zipfile.ZipFile(path, "w") as zf:
+            zf.writestr("word/document.xml", b"<w:document" + _W_NS + b"/>")
+            zf.writestr("word/header1.xml", b"<w:hdr" + _W_NS + b"/>")
+            zf.writestr("word/_rels/header1.xml.rels", b"<Relationships xmlns=\"http://schemas.openxmlformats.org/package/2006/relationships\"/>")
+
+    def test_allows_media_binary_replacement(self, tmp_path):
+        src = tmp_path / "input.docx"
+        out = tmp_path / "output.docx"
+        self._make_minimal_docx(src)
+
+        patch_docx(
+            src_docx=src,
+            out_docx=out,
+            replacements={
+                "word/document.xml": b"<w:document" + _W_NS + b"><w:body/></w:document>",
+                "word/media/image1.png": b"\x89PNG",
+            },
+        )
+        with zipfile.ZipFile(out, "r") as zf:
+            assert zf.read("word/media/image1.png") == b"\x89PNG"
+
+    def test_exclude_parts_drops_old_header_parts(self, tmp_path):
+        src = tmp_path / "input.docx"
+        out = tmp_path / "output.docx"
+        self._make_docx_with_header(src)
+
+        patch_docx(
+            src_docx=src,
+            out_docx=out,
+            replacements={"word/document.xml": b"<w:document" + _W_NS + b"><w:body/></w:document>"},
+            exclude_parts={"word/header1.xml", "word/_rels/header1.xml.rels"},
+        )
+        with zipfile.ZipFile(out, "r") as zf:
+            assert "word/header1.xml" not in zf.namelist()
+            assert "word/_rels/header1.xml.rels" not in zf.namelist()

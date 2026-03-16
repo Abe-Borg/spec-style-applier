@@ -1,0 +1,90 @@
+import base64
+from pathlib import Path
+
+from header_footer_importer import import_headers_footers
+
+
+def _seed_extract(tmp_path: Path) -> Path:
+    (tmp_path / "word" / "_rels").mkdir(parents=True, exist_ok=True)
+    (tmp_path / "word" / "document.xml").write_text(
+        '<?xml version="1.0" encoding="UTF-8"?>'
+        '<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" '
+        'xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">'
+        '<w:body><w:p/><w:sectPr><w:pgSz w:w="12240" w:h="15840"/></w:sectPr></w:body></w:document>',
+        encoding="utf-8",
+    )
+    (tmp_path / "word" / "_rels" / "document.xml.rels").write_text(
+        '<?xml version="1.0" encoding="UTF-8"?>'
+        '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">'
+        '<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/>'
+        '<Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/header" Target="header9.xml"/>'
+        '</Relationships>',
+        encoding="utf-8",
+    )
+    (tmp_path / "[Content_Types].xml").write_text(
+        '<?xml version="1.0" encoding="UTF-8"?>'
+        '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">'
+        '<Default Extension="xml" ContentType="application/xml"/>'
+        '</Types>',
+        encoding="utf-8",
+    )
+    (tmp_path / "word" / "header9.xml").write_text("<old/>", encoding="utf-8")
+    return tmp_path
+
+
+def test_import_headers_footers_replaces_parts_and_refs(tmp_path):
+    extract = _seed_extract(tmp_path)
+    registry = {
+        "headers_footers": {
+            "headers": [
+                {
+                    "part_name": "word/header1.xml",
+                    "rid": "rId10",
+                    "xml": '<w:hdr xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"/>',
+                    "media": [
+                        {
+                            "path": "media/logo.png",
+                            "content_base64": base64.b64encode(b"png").decode("ascii"),
+                        }
+                    ],
+                }
+            ],
+            "footers": [
+                {
+                    "part_name": "word/footer1.xml",
+                    "rid": "rId11",
+                    "xml": '<w:ftr xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"/>',
+                }
+            ],
+        },
+        "page_layout": {
+            "section_chain": [
+                {
+                    "header_refs": {"default": "rId10"},
+                    "footer_refs": {"default": "rId11"},
+                }
+            ]
+        },
+    }
+
+    log = []
+    import_headers_footers(extract, registry, log)
+
+    assert not (extract / "word" / "header9.xml").exists()
+    assert (extract / "word" / "header1.xml").exists()
+    assert (extract / "word" / "footer1.xml").exists()
+    assert (extract / "word" / "media" / "logo.png").read_bytes() == b"png"
+
+    rels_xml = (extract / "word" / "_rels" / "document.xml.rels").read_text(encoding="utf-8")
+    assert "relationships/header" in rels_xml
+    assert "relationships/footer" in rels_xml
+    assert "header9.xml" not in rels_xml
+
+    doc_xml = (extract / "word" / "document.xml").read_text(encoding="utf-8")
+    assert "headerReference" in doc_xml
+    assert "footerReference" in doc_xml
+
+    ct_xml = (extract / "[Content_Types].xml").read_text(encoding="utf-8")
+    assert "/word/header1.xml" in ct_xml
+    assert "/word/footer1.xml" in ct_xml
+    assert 'Extension="png"' in ct_xml

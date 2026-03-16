@@ -3,6 +3,7 @@ import hashlib
 import zipfile
 from pathlib import Path
 from typing import List, Dict, Any
+import xml.etree.ElementTree as ET
 
 def _sha256(b: bytes) -> str:
     return hashlib.sha256(b).hexdigest()
@@ -18,7 +19,7 @@ def _extract_all_sectpr_blocks(document_xml: str) -> List[str]:
 def _normalize_sectpr_for_comparison(sectpr: str) -> str:
     """Strip managed layout tags so only non-layout section semantics are compared."""
     out = sectpr
-    for tag in ("pgSz", "pgMar", "cols", "docGrid"):
+    for tag in ("pgSz", "pgMar", "cols", "docGrid", "headerReference", "footerReference", "titlePg"):
         out = re.sub(rf'<w:{tag}\b[^>]*/>', '', out)
         out = re.sub(rf'<w:{tag}\b[^>]*>[\s\S]*?</w:{tag}>', '', out, flags=re.S)
     # reduce whitespace noise introduced by stripping
@@ -75,8 +76,8 @@ def verify_phase2_invariants(
     """
     Verify Phase 2 invariants:
     1. sectPr non-layout semantics unchanged (managed layout tags may change)
-    2. Headers/footers unchanged (byte-identical)
-    3. Header/footer relationship subset unchanged
+    2. If architect header/footer data is present, output header/footer parts match architect set
+       and sectPr references resolve to valid document rels IDs
     3. Run properties unchanged EXCEPT for font-related elements (rFonts, sz, szCs)
     
     The font exception allows us to strip hardcoded fonts from MasterSpec docs
@@ -96,25 +97,40 @@ def verify_phase2_invariants(
     if before_norm != after_norm:
         raise RuntimeError("INVARIANT FAIL: non-layout sectPr semantics changed")
 
-    # 2) headers/footers unchanged
-    # NOTE: This check requires the *final* output docx. If you pass new_docx,
-    # we will byte-compare all header/footer parts.
-    if new_docx is not None:
-        with zipfile.ZipFile(src_docx, "r") as z_before, zipfile.ZipFile(new_docx, "r") as z_after:
-            before_names = [n for n in z_before.namelist() if (n.startswith("word/header") or n.startswith("word/footer")) and n.endswith(".xml")]
-            after_names = [n for n in z_after.namelist() if (n.startswith("word/header") or n.startswith("word/footer")) and n.endswith(".xml")]
+    # 2) header/footer invariants (against architect registry, when provided)
+    hf_data = (arch_template_registry or {}).get("headers_footers", {}) if isinstance(arch_template_registry, dict) else {}
+    arch_headers = hf_data.get("headers", []) if isinstance(hf_data, dict) else []
+    arch_footers = hf_data.get("footers", []) if isinstance(hf_data, dict) else []
 
-            if sorted(before_names) != sorted(after_names):
-                raise RuntimeError("INVARIANT FAIL: header/footer part set changed")
+    if new_docx is not None and (arch_headers or arch_footers):
+        expected_parts = {
+            item.get("part_name")
+            for item in [*arch_headers, *arch_footers]
+            if isinstance(item, dict) and isinstance(item.get("part_name"), str)
+        }
+        with zipfile.ZipFile(new_docx, "r") as z_after:
+            actual_parts = {
+                n for n in z_after.namelist()
+                if (n.startswith("word/header") or n.startswith("word/footer")) and n.endswith(".xml")
+            }
+            if expected_parts != actual_parts:
+                raise RuntimeError(
+                    "INVARIANT FAIL: output header/footer part set does not match architect registry\n"
+                    f"Expected: {sorted(expected_parts)}\nActual: {sorted(actual_parts)}"
+                )
 
-            for name in before_names:
-                if z_before.read(name) != z_after.read(name):
-                    raise RuntimeError(f"INVARIANT FAIL: header/footer changed: {name}")
+            rels_xml = z_after.read("word/_rels/document.xml.rels")
+            rels_root = ET.fromstring(rels_xml)
+            rel_ids = {rel.attrib.get("Id") for rel in rels_root.findall('.//{*}Relationship') if rel.attrib.get("Id")}
 
-            before_rels = z_before.read("word/_rels/document.xml.rels").decode("utf-8", errors="strict")
-            after_rels = z_after.read("word/_rels/document.xml.rels").decode("utf-8", errors="strict")
-            if _extract_hf_relationship_subset(before_rels) != _extract_hf_relationship_subset(after_rels):
-                raise RuntimeError("INVARIANT FAIL: header/footer relationship subset changed")
+            out_doc_xml = z_after.read("word/document.xml").decode("utf-8", errors="strict")
+            refs = re.findall(r'<w:(?:headerReference|footerReference)\b[^>]*\br:id="([^"]+)"', out_doc_xml)
+            unresolved = sorted({rid for rid in refs if rid not in rel_ids})
+            if unresolved:
+                raise RuntimeError(
+                    "INVARIANT FAIL: document.xml contains header/footer refs with missing rel IDs: "
+                    + ", ".join(unresolved)
+                )
 
     # 3) no run-level formatting edits EXCEPT font-related (rFonts, sz, szCs)
     # We normalize rPr blocks by stripping font elements, then compare
