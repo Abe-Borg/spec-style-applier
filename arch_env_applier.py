@@ -15,7 +15,8 @@ Application order (deterministic):
 
 NOTE: This module does NOT touch:
 - numbering.xml (handled separately with explicit numPr materialization)
-- headers/footers (preserved from source)
+
+It now imports architect headers/footers after page layout sync.
 
 It DOES sync page layout in document.xml sectPr blocks for managed tags:
 - w:pgSz
@@ -752,6 +753,7 @@ def apply_environment_to_target(
     apply_settings_flag: bool = True,
     apply_doc_defaults_flag: bool = True,
     apply_fonts_flag: bool = True,
+    apply_headers_footers_flag: bool = True,
 ) -> None:
     """
     Apply the formatting environment from arch_template_registry to target.
@@ -762,6 +764,7 @@ def apply_environment_to_target(
     3. Font table (font declarations)
     4. docDefaults in styles.xml (baseline formatting)
     5. page layout managed tags in document.xml sectPr (pgSz/pgMar/cols/docGrid)
+    6. headers/footers
     
     Args:
         target_extract_dir: Extracted target document folder
@@ -777,28 +780,28 @@ def apply_environment_to_target(
     
     # 1. Theme
     if apply_theme_flag:
-        log.append("\n[1/5] Applying theme...")
+        log.append("\n[1/6] Applying theme...")
         apply_theme(target_extract_dir, registry, log)
     else:
-        log.append("\n[1/5] Theme application skipped")
+        log.append("\n[1/6] Theme application skipped")
     
     # 2. Settings/compat
     if apply_settings_flag:
-        log.append("\n[2/5] Applying settings/compat...")
+        log.append("\n[2/6] Applying settings/compat...")
         apply_settings(target_extract_dir, registry, log)
     else:
-        log.append("\n[2/5] Settings application skipped")
+        log.append("\n[2/6] Settings application skipped")
     
     # 3. Font table
     if apply_fonts_flag:
-        log.append("\n[3/5] Applying font table...")
+        log.append("\n[3/6] Applying font table...")
         apply_font_table(target_extract_dir, registry, log)
     else:
-        log.append("\n[3/5] Font table application skipped")
+        log.append("\n[3/6] Font table application skipped")
     
     # 4. docDefaults in styles.xml
     if apply_doc_defaults_flag:
-        log.append("\n[4/5] Applying docDefaults...")
+        log.append("\n[4/6] Applying docDefaults...")
         styles_path = target_extract_dir / "word" / "styles.xml"
         if styles_path.exists():
             styles_xml = styles_path.read_text(encoding="utf-8")
@@ -807,10 +810,17 @@ def apply_environment_to_target(
         else:
             log.append("WARNING: No styles.xml in target; cannot apply docDefaults")
     else:
-        log.append("\n[4/5] docDefaults application skipped")
+        log.append("\n[4/6] docDefaults application skipped")
 
-    log.append("\n[5/5] Applying page layout managed tags...")
+    log.append("\n[5/6] Applying page layout managed tags...")
     apply_page_layout(target_extract_dir, registry, log)
+
+    if apply_headers_footers_flag:
+        log.append("\n[6/6] Applying headers/footers...")
+        from header_footer_importer import import_headers_footers
+        import_headers_footers(target_extract_dir, registry, log)
+    else:
+        log.append("\n[6/6] Headers/footers application skipped")
     
     log.append("\n" + "=" * 60)
     log.append("END ENVIRONMENT APPLICATION")

@@ -418,10 +418,41 @@ def main():
             if local_path.exists():
                 replacements[rel_path] = local_path.read_bytes()
 
+        # Add imported header/footer parts and rels
+        for hf_path in sorted((extract_dir / "word").glob("header*.xml")):
+            replacements[f"word/{hf_path.name}"] = hf_path.read_bytes()
+        for hf_path in sorted((extract_dir / "word").glob("footer*.xml")):
+            replacements[f"word/{hf_path.name}"] = hf_path.read_bytes()
+
+        rels_dir = extract_dir / "word" / "_rels"
+        if rels_dir.exists():
+            for rels_path in sorted(rels_dir.glob("header*.xml.rels")):
+                replacements[f"word/_rels/{rels_path.name}"] = rels_path.read_bytes()
+            for rels_path in sorted(rels_dir.glob("footer*.xml.rels")):
+                replacements[f"word/_rels/{rels_path.name}"] = rels_path.read_bytes()
+
+        media_dir = extract_dir / "word" / "media"
+        if media_dir.exists():
+            for media_path in sorted(media_dir.iterdir()):
+                if media_path.is_file():
+                    replacements[f"word/media/{media_path.name}"] = media_path.read_bytes()
+
+        with zipfile.ZipFile(input_docx_path, "r") as z:
+            old_hf_parts = {
+                n for n in z.namelist()
+                if (n.startswith("word/header") or n.startswith("word/footer")) and n.endswith(".xml")
+            }
+            old_hf_rels = {
+                n for n in z.namelist()
+                if (n.startswith("word/_rels/header") or n.startswith("word/_rels/footer")) and n.endswith(".rels")
+            }
+        exclude_parts = (old_hf_parts | old_hf_rels) - set(replacements.keys())
+
         patch_docx(
             src_docx=input_docx_path,
             out_docx=output_docx_path,
             replacements=replacements,
+            exclude_parts=exclude_parts,
         )
 
         # Optional invariant verification
