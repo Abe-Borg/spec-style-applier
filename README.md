@@ -27,7 +27,7 @@ This runs the full pipeline: extract → build bundle → LLM classify → apply
 python gui.py
 ```
 
-The GUI provides file/folder pickers, batch processing, and real-time progress logging. Batch mode processes all `.docx` files in a folder sequentially.
+The GUI provides file/folder pickers, batch processing, and real-time progress logging. Batch mode can process files concurrently with configurable workers.
 
 ### Manual Pipeline (Two-Step)
 
@@ -120,6 +120,14 @@ pip install -r requirements-build.txt
 2. **`w:sectPr` untouched** — no page setup or section break changes
 3. **Numbering definitions untouched** — `numbering.xml` only modified by the numbering importer
 4. **Registry-only styling** — no guessing style IDs; missing role = skip + log
+
+
+## Batch Performance
+
+- Default concurrent worker count is **3 files at a time** in GUI batch mode.
+- Worker count is adjustable from **1 to 6** with the **Concurrent Files** control.
+- Throughput typically scales close to linearly until you hit Anthropic API rate limits.
+- Each concurrent file creates its own extraction directory, so temporary disk usage can grow by roughly **10–50 MB per active file** depending on document size and embedded media.
 
 ## Testing
 
