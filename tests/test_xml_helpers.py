@@ -79,7 +79,7 @@ class TestStripRunFontFormatting:
 
 
 class TestStripConflictingDirectPpr:
-    def test_removes_jc_ind_spacing_but_keeps_numpr(self):
+    def test_removes_jc_ind_spacing_and_numpr(self):
         p = (
             '<w:p><w:pPr>'
             '<w:numPr><w:numId w:val="4"/><w:ilvl w:val="1"/></w:numPr>'
@@ -90,7 +90,7 @@ class TestStripConflictingDirectPpr:
         assert '<w:jc' not in result
         assert '<w:ind' not in result
         assert '<w:spacing' not in result
-        assert '<w:numPr>' in result
+        assert '<w:numPr' not in result
 
     def test_sectpr_unchanged(self):
         p = '<w:p><w:pPr><w:sectPr/><w:jc w:val="center"/></w:pPr></w:p>'

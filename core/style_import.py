@@ -56,6 +56,9 @@ def _find_style_numpr_in_chain(styles_xml_text: str, style_id: str, max_hops: in
     return None
 
 
+# DEPRECATED: Phase 2 no longer materializes style-linked numbering before style swaps
+# because paragraph-level numPr overrides architect style-level numbering in Word's cascade.
+# Kept for compatibility with tests and potential legacy workflows.
 def ensure_explicit_numpr_from_current_style(p_xml: str, styles_xml_text: str) -> str:
     # never touch sectPr carrier paragraphs
     if "<w:sectPr" in p_xml:

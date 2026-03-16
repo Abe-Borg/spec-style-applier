@@ -27,7 +27,6 @@ from core.stability import (
 )
 
 from core.style_import import (
-    ensure_explicit_numpr_from_current_style,
     materialize_arch_style_block,
     extract_style_block_raw,
     import_arch_styles_into_target,
