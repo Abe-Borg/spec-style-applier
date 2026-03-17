@@ -329,7 +329,7 @@ def main():
                 "Fix the contract files and retry."
             )
 
-        apply_environment_to_target(
+        env_result = apply_environment_to_target(
             target_extract_dir=extract_dir,
             registry=env_registry,
             log=log
@@ -418,24 +418,20 @@ def main():
             if local_path.exists():
                 replacements[rel_path] = local_path.read_bytes()
 
-        # Add imported header/footer parts and rels
-        for hf_path in sorted((extract_dir / "word").glob("header*.xml")):
-            replacements[f"word/{hf_path.name}"] = hf_path.read_bytes()
-        for hf_path in sorted((extract_dir / "word").glob("footer*.xml")):
-            replacements[f"word/{hf_path.name}"] = hf_path.read_bytes()
-
-        rels_dir = extract_dir / "word" / "_rels"
-        if rels_dir.exists():
-            for rels_path in sorted(rels_dir.glob("header*.xml.rels")):
-                replacements[f"word/_rels/{rels_path.name}"] = rels_path.read_bytes()
-            for rels_path in sorted(rels_dir.glob("footer*.xml.rels")):
-                replacements[f"word/_rels/{rels_path.name}"] = rels_path.read_bytes()
-
-        media_dir = extract_dir / "word" / "media"
-        if media_dir.exists():
-            for media_path in sorted(media_dir.iterdir()):
-                if media_path.is_file():
-                    replacements[f"word/media/{media_path.name}"] = media_path.read_bytes()
+        # Add imported header/footer parts and rels from explicit manifest.
+        hf_manifest = env_result.get("header_footer_import", {}) if isinstance(env_result, dict) else {}
+        for name in sorted(hf_manifest.get("part_names", [])):
+            local_path = extract_dir / name
+            if local_path.exists():
+                replacements[name] = local_path.read_bytes()
+        for name in sorted(hf_manifest.get("rels_names", [])):
+            local_path = extract_dir / name
+            if local_path.exists():
+                replacements[name] = local_path.read_bytes()
+        for name in sorted(hf_manifest.get("media_names", [])):
+            local_path = extract_dir / name
+            if local_path.exists():
+                replacements[name] = local_path.read_bytes()
 
         with zipfile.ZipFile(input_docx_path, "r") as z:
             old_hf_parts = {

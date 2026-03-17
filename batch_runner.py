@@ -61,6 +61,7 @@ class SharedConfig:
 
 @dataclass(frozen=True)
 class PreparedFile:
+    file_key: str
     docx_path: Path
     extract_dir: Path
     bundle: Dict[str, Any]
@@ -159,7 +160,7 @@ def process_single_file(
         classifications_path.write_text(json.dumps(classifications, indent=2), encoding="utf-8")
         per_file_log.append(f"Classifications saved: {classifications_path}")
 
-        apply_environment_to_target(target_extract_dir=extract_dir, registry=env_registry, log=per_file_log)
+        env_result = apply_environment_to_target(target_extract_dir=extract_dir, registry=env_registry, log=per_file_log)
         per_file_log.append("Applied environment")
 
         used_roles = {
@@ -218,23 +219,25 @@ def process_single_file(
             if local_path.exists():
                 replacements[rel_path] = local_path.read_bytes()
 
-        for hf_path in sorted((extract_dir / "word").glob("header*.xml")):
-            replacements[f"word/{hf_path.name}"] = hf_path.read_bytes()
-        for hf_path in sorted((extract_dir / "word").glob("footer*.xml")):
-            replacements[f"word/{hf_path.name}"] = hf_path.read_bytes()
+        hf_manifest = env_result.get("header_footer_import", {}) if isinstance(env_result, dict) else {}
+        hf_parts = sorted(hf_manifest.get("part_names", []))
+        hf_rels = sorted(hf_manifest.get("rels_names", []))
+        hf_media = sorted(hf_manifest.get("media_names", []))
 
-        rels_dir = extract_dir / "word" / "_rels"
-        if rels_dir.exists():
-            for rels_path in sorted(rels_dir.glob("header*.xml.rels")):
-                replacements[f"word/_rels/{rels_path.name}"] = rels_path.read_bytes()
-            for rels_path in sorted(rels_dir.glob("footer*.xml.rels")):
-                replacements[f"word/_rels/{rels_path.name}"] = rels_path.read_bytes()
+        for part_name in hf_parts:
+            local_path = extract_dir / part_name
+            if local_path.exists():
+                replacements[part_name] = local_path.read_bytes()
 
-        media_dir = extract_dir / "word" / "media"
-        if media_dir.exists():
-            for media_path in sorted(media_dir.iterdir()):
-                if media_path.is_file():
-                    replacements[f"word/media/{media_path.name}"] = media_path.read_bytes()
+        for rel_name in hf_rels:
+            local_path = extract_dir / rel_name
+            if local_path.exists():
+                replacements[rel_name] = local_path.read_bytes()
+
+        for media_name in hf_media:
+            local_path = extract_dir / media_name
+            if local_path.exists():
+                replacements[media_name] = local_path.read_bytes()
 
         with zipfile.ZipFile(docx_path, "r") as z:
             old_hf_parts = {
@@ -309,7 +312,7 @@ def _prepare_file_for_batch(
     per_file_log.append(
         f"Built slim bundle: {unresolved} unresolved + {deterministic} deterministic"
     )
-    return PreparedFile(docx_path=docx_path, extract_dir=extract_dir, bundle=bundle, prep_log=per_file_log)
+    return PreparedFile(file_key=_build_file_key(docx_path), docx_path=docx_path, extract_dir=extract_dir, bundle=bundle, prep_log=per_file_log)
 
 
 def _apply_batch_result(
@@ -330,7 +333,7 @@ def _apply_batch_result(
         classifications_path.write_text(json.dumps(classifications, indent=2), encoding="utf-8")
         per_file_log.append(f"Classifications saved: {classifications_path}")
 
-        apply_environment_to_target(target_extract_dir=prepared.extract_dir, registry=env_registry, log=per_file_log)
+        env_result = apply_environment_to_target(target_extract_dir=prepared.extract_dir, registry=env_registry, log=per_file_log)
         per_file_log.append("Applied environment")
 
         used_roles = {
@@ -389,23 +392,25 @@ def _apply_batch_result(
             if local_path.exists():
                 replacements[rel_path] = local_path.read_bytes()
 
-        for hf_path in sorted((prepared.extract_dir / "word").glob("header*.xml")):
-            replacements[f"word/{hf_path.name}"] = hf_path.read_bytes()
-        for hf_path in sorted((prepared.extract_dir / "word").glob("footer*.xml")):
-            replacements[f"word/{hf_path.name}"] = hf_path.read_bytes()
+        hf_manifest = env_result.get("header_footer_import", {}) if isinstance(env_result, dict) else {}
+        hf_parts = sorted(hf_manifest.get("part_names", []))
+        hf_rels = sorted(hf_manifest.get("rels_names", []))
+        hf_media = sorted(hf_manifest.get("media_names", []))
 
-        rels_dir = prepared.extract_dir / "word" / "_rels"
-        if rels_dir.exists():
-            for rels_path in sorted(rels_dir.glob("header*.xml.rels")):
-                replacements[f"word/_rels/{rels_path.name}"] = rels_path.read_bytes()
-            for rels_path in sorted(rels_dir.glob("footer*.xml.rels")):
-                replacements[f"word/_rels/{rels_path.name}"] = rels_path.read_bytes()
+        for part_name in hf_parts:
+            local_path = prepared.extract_dir / part_name
+            if local_path.exists():
+                replacements[part_name] = local_path.read_bytes()
 
-        media_dir = prepared.extract_dir / "word" / "media"
-        if media_dir.exists():
-            for media_path in sorted(media_dir.iterdir()):
-                if media_path.is_file():
-                    replacements[f"word/media/{media_path.name}"] = media_path.read_bytes()
+        for rel_name in hf_rels:
+            local_path = prepared.extract_dir / rel_name
+            if local_path.exists():
+                replacements[rel_name] = local_path.read_bytes()
+
+        for media_name in hf_media:
+            local_path = prepared.extract_dir / media_name
+            if local_path.exists():
+                replacements[media_name] = local_path.read_bytes()
 
         with zipfile.ZipFile(prepared.docx_path, "r") as z:
             old_hf_parts = {
@@ -529,9 +534,9 @@ def run_batch_api(
         }
         for future in as_completed(futures):
             prepared = future.result()
-            prepared_files[prepared.docx_path.name] = prepared
+            prepared_files[prepared.file_key] = prepared
 
-    file_bundles = {name: prepared.bundle for name, prepared in prepared_files.items()}
+    file_bundles = {key: prepared.bundle for key, prepared in prepared_files.items()}
     requests = build_batch_requests(file_bundles, available_roles, model)
 
     raw_results = submit_and_poll(
@@ -552,13 +557,13 @@ def run_batch_api(
             executor.submit(
                 _apply_batch_result,
                 prepared,
-                per_file_classifications[filename],
+                per_file_classifications[file_key],
                 arch_registry,
                 env_registry,
                 arch_styles_xml,
                 output_dir,
-            ): filename
-            for filename, prepared in prepared_files.items()
+            ): file_key
+            for file_key, prepared in prepared_files.items()
         }
         for future in as_completed(futures):
             result = future.result()
@@ -567,3 +572,8 @@ def run_batch_api(
                 on_file_complete(result)
 
     return sorted(results, key=lambda item: item.filename)
+def _build_file_key(docx_path: Path) -> str:
+    safe_stem = re.sub(r"[^A-Za-z0-9_.-]", "_", docx_path.stem)
+    digest = hashlib.sha1(str(docx_path.resolve()).encode("utf-8")).hexdigest()[:12]
+    return f"{safe_stem}__{digest}"
+

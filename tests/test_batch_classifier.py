@@ -16,7 +16,7 @@ def test_build_batch_requests_creates_chunked_custom_ids(monkeypatch):
         model="m",
     )
 
-    assert [r["custom_id"] for r in reqs] == ["my-file__chunk0", "my-file__chunk1"]
+    assert [r["custom_id"] for r in reqs] == ["my-file.docx__chunk0", "my-file.docx__chunk1"]
     assert reqs[0]["params"]["model"] == "m"
     assert reqs[0]["params"]["output_config"] == {"effort": "high"}
 
@@ -32,8 +32,8 @@ def test_reassemble_file_classifications_merges_chunks(monkeypatch):
 
     out = reassemble_file_classifications(
         results={
-            "a__chunk0": {"classifications": [{"paragraph_index": 1, "csi_role": "PART"}]},
-            "a__chunk1": {"classifications": [{"paragraph_index": 2, "csi_role": "PART"}]},
+            "a.docx__chunk0": {"classifications": [{"paragraph_index": 1, "csi_role": "PART"}]},
+            "a.docx__chunk1": {"classifications": [{"paragraph_index": 2, "csi_role": "PART"}]},
         },
         file_bundles={
             "a.docx": {
@@ -47,3 +47,16 @@ def test_reassemble_file_classifications_merges_chunks(monkeypatch):
 
     assert "a.docx" in out
     assert len(out["a.docx"]["classifications"]) == 2
+
+
+def test_batch_requests_are_unique_for_duplicate_basenames(monkeypatch):
+    from core import batch_classifier as bc
+
+    monkeypatch.setattr(bc, "_split_bundle_into_chunks", lambda bundle: [{"paragraphs": [{"paragraph_index": 1}]}])
+    reqs = build_batch_requests(
+        file_bundles={"spec__aaa111": {"paragraphs": []}, "spec__bbb222": {"paragraphs": []}},
+        available_roles=["PART"],
+        model="m",
+    )
+    custom_ids = [r["custom_id"] for r in reqs]
+    assert len(custom_ids) == len(set(custom_ids))

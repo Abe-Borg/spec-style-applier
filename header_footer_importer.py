@@ -1,20 +1,35 @@
 from __future__ import annotations
 
 import base64
+import hashlib
 import re
 import xml.etree.ElementTree as ET
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, List, Tuple
 
 from core.ooxml_namespaces import (
     CT_NS,
     PKG_REL_NS,
-    R_NS,
-    W_NS,
     serialize_content_types,
     serialize_package_relationships,
-    serialize_wordprocessingml,
 )
+from core.section_mapping import choose_section_sources
+from core.sectpr_tools import (
+    canonical_sectpr_order_index,
+    child_tag_name,
+    extract_all_sectpr_blocks,
+    extract_sectpr_children,
+    replace_nth_sectpr_block,
+    strip_tag_block,
+)
+
+
+@dataclass
+class HeaderFooterImportResult:
+    part_names: set[str] = field(default_factory=set)
+    rels_names: set[str] = field(default_factory=set)
+    media_names: set[str] = field(default_factory=set)
 
 
 def _iter_hf_entries(registry: Dict[str, Any]) -> List[Tuple[str, Dict[str, Any]]]:
@@ -64,10 +79,33 @@ def _remove_existing_hf_files(target_extract_dir: Path, log: List[str]) -> None:
             log.append(f"Removed old rels: word/_rels/{path.name}")
 
 
-def _write_hf_parts(target_extract_dir: Path, entries: List[Tuple[str, Dict[str, Any]]], log: List[str]) -> Dict[str, str]:
+def _allocate_unique_media_name(part_name: str, index: int, original_name: str, payload: bytes, used: set[str]) -> str:
+    stem = Path(part_name).stem
+    suffix = hashlib.sha1(payload).hexdigest()[:8]
+    ext = Path(original_name).suffix.lower() or ".bin"
+    candidate = f"hf_{stem}_{index:02d}_{suffix}{ext}"
+    n = 1
+    while candidate in used:
+        candidate = f"hf_{stem}_{index:02d}_{suffix}_{n}{ext}"
+        n += 1
+    used.add(candidate)
+    return candidate
+
+
+def _normalize_rel_target(target: str) -> str:
+    return target.strip().lstrip("./")
+
+
+def _write_hf_parts(
+    target_extract_dir: Path,
+    entries: List[Tuple[str, Dict[str, Any]]],
+    log: List[str],
+    result: HeaderFooterImportResult,
+) -> Dict[str, str]:
     part_to_type: Dict[str, str] = {}
     media_out = target_extract_dir / "word" / "media"
-    written_media: set[str] = set()
+    media_out.mkdir(parents=True, exist_ok=True)
+    written_media: set[str] = {p.name for p in media_out.iterdir() if p.is_file()} if media_out.exists() else set()
 
     for kind, entry in entries:
         part_name = entry.get("part_name")
@@ -79,30 +117,43 @@ def _write_hf_parts(target_extract_dir: Path, entries: List[Tuple[str, Dict[str,
         part_path = target_extract_dir / part_name
         part_path.parent.mkdir(parents=True, exist_ok=True)
         part_path.write_text(xml_content, encoding="utf-8")
+        result.part_names.add(part_name)
         part_to_type[part_name] = kind
         log.append(f"Wrote {kind} part: {part_name}")
 
         rels_xml = entry.get("rels_xml") or entry.get("relationships_xml")
         rels_name = entry.get("rels_part_name")
-        if isinstance(rels_xml, str):
-            if not isinstance(rels_name, str) or not rels_name:
-                rels_name = f"word/_rels/{Path(part_name).name}.rels"
-            rels_path = target_extract_dir / rels_name
-            rels_path.parent.mkdir(parents=True, exist_ok=True)
-            rels_path.write_text(rels_xml, encoding="utf-8")
-            log.append(f"Wrote rels part: {rels_name}")
+        target_map: Dict[str, str] = {}
 
-        for media_item in _resolve_media_items(entry):
+        media_items = _resolve_media_items(entry)
+        for idx, media_item in enumerate(media_items, start=1):
             filename = _resolve_media_filename(media_item)
             payload = _resolve_media_bytes(media_item)
             if not filename or payload is None:
                 continue
-            media_out.mkdir(parents=True, exist_ok=True)
-            if filename in written_media:
-                continue
-            (media_out / filename).write_bytes(payload)
-            written_media.add(filename)
-            log.append(f"Wrote media asset: word/media/{filename}")
+            new_name = _allocate_unique_media_name(part_name, idx, filename, payload, written_media)
+            out_rel = f"media/{new_name}"
+            target_map[_normalize_rel_target(f"media/{filename}")] = out_rel
+            target_map[_normalize_rel_target(f"./media/{filename}")] = out_rel
+            (media_out / new_name).write_bytes(payload)
+            result.media_names.add(f"word/media/{new_name}")
+            log.append(f"Wrote media asset: word/media/{new_name}")
+
+        if isinstance(rels_xml, str):
+            if not isinstance(rels_name, str) or not rels_name:
+                rels_name = f"word/_rels/{Path(part_name).name}.rels"
+            if target_map:
+                rels_root = ET.fromstring(rels_xml.encode("utf-8"))
+                for rel in rels_root.findall(f"{{{PKG_REL_NS}}}Relationship"):
+                    old = _normalize_rel_target(rel.attrib.get("Target", ""))
+                    if old in target_map:
+                        rel.set("Target", target_map[old])
+                rels_xml = serialize_package_relationships(rels_root).decode("utf-8")
+            rels_path = target_extract_dir / rels_name
+            rels_path.parent.mkdir(parents=True, exist_ok=True)
+            rels_path.write_text(rels_xml, encoding="utf-8")
+            result.rels_names.add(rels_name)
+            log.append(f"Wrote rels part: {rels_name}")
 
     return part_to_type
 
@@ -174,47 +225,50 @@ def _build_arch_rid_to_part(entries: List[Tuple[str, Dict[str, Any]]]) -> Dict[s
     return out
 
 
+def _raw_ref(kind: str, ref_type: str, rid: str) -> str:
+    return f'<w:{kind}Reference w:type="{ref_type}" r:id="{rid}"/>'
+
+
 def _rewire_document_sectpr(target_extract_dir: Path, registry: Dict[str, Any], entries: List[Tuple[str, Dict[str, Any]]], part_to_rid: Dict[str, str], log: List[str]) -> None:
     doc_path = target_extract_dir / "word" / "document.xml"
     if not doc_path.exists():
         return
 
     page_layout = registry.get("page_layout", {}) if isinstance(registry, dict) else {}
-    section_chain = page_layout.get("section_chain", []) if isinstance(page_layout, dict) else []
-    section_chain = [s for s in section_chain if isinstance(s, dict)]
-
     rid_to_part = _build_arch_rid_to_part(entries)
 
     doc_original = doc_path.read_text(encoding="utf-8")
-    had_w_prefix = "<w:" in doc_original
-    root = ET.fromstring(doc_original.encode("utf-8"))
-    sectprs = root.findall(f".//{{{W_NS}}}sectPr")
+    sectprs = extract_all_sectpr_blocks(doc_original)
     if not sectprs:
         log.append("No sectPr blocks found; skipped header/footer rewiring")
         return
 
-    use_one_to_one = len(section_chain) == len(sectprs) and len(section_chain) > 0
-    fallback_section = section_chain[-1] if section_chain else {}
+    section_sources = choose_section_sources(len(sectprs), page_layout, require_default=True, log=log)
+    updated_xml = doc_original
+    order_index = canonical_sectpr_order_index()
 
-    for idx, sectpr in enumerate(sectprs):
-        for tag in ("headerReference", "footerReference"):
-            for node in list(sectpr.findall(f"{{{W_NS}}}{tag}")):
-                sectpr.remove(node)
-
-        source = section_chain[idx] if use_one_to_one else fallback_section
+    for idx, (target_sectpr, source) in enumerate(zip(sectprs, section_sources)):
         headers, footers = _extract_arch_hf_refs(source)
 
-        insert_nodes: List[ET.Element] = []
+        open_tag_m = re.match(r'(<w:sectPr\b[^>]*>)', target_sectpr)
+        close_tag = "</w:sectPr>"
+        if not open_tag_m or not target_sectpr.endswith(close_tag):
+            continue
+        open_tag = open_tag_m.group(1)
+        inner = target_sectpr[len(open_tag):-len(close_tag)]
+
+        for tag in ("headerReference", "footerReference", "titlePg"):
+            inner = strip_tag_block(inner, tag)
+        children = extract_sectpr_children(inner)
+
+        insert_nodes: List[str] = []
         has_first = False
         for ref_type, old_rid in headers.items():
             part_name = rid_to_part.get(old_rid)
             new_rid = part_to_rid.get(part_name) if part_name else None
             if not new_rid:
                 continue
-            node = ET.Element(f"{{{W_NS}}}headerReference")
-            node.attrib[f"{{{W_NS}}}type"] = ref_type
-            node.attrib[f"{{{R_NS}}}id"] = new_rid
-            insert_nodes.append(node)
+            insert_nodes.append(_raw_ref("header", ref_type, new_rid))
             has_first = has_first or ref_type == "first"
 
         for ref_type, old_rid in footers.items():
@@ -222,23 +276,28 @@ def _rewire_document_sectpr(target_extract_dir: Path, registry: Dict[str, Any], 
             new_rid = part_to_rid.get(part_name) if part_name else None
             if not new_rid:
                 continue
-            node = ET.Element(f"{{{W_NS}}}footerReference")
-            node.attrib[f"{{{W_NS}}}type"] = ref_type
-            node.attrib[f"{{{R_NS}}}id"] = new_rid
-            insert_nodes.append(node)
+            insert_nodes.append(_raw_ref("footer", ref_type, new_rid))
             has_first = has_first or ref_type == "first"
 
-        for node in reversed(insert_nodes):
-            sectpr.insert(0, node)
+        if has_first:
+            insert_nodes.append("<w:titlePg/>")
 
-        if has_first and sectpr.find(f"{{{W_NS}}}titlePg") is None:
-            anchor = len(insert_nodes)
-            sectpr.insert(anchor, ET.Element(f"{{{W_NS}}}titlePg"))
+        for node in insert_nodes:
+            node_tag = child_tag_name(node)
+            node_order = order_index.get(node_tag or "", 10_000)
+            insert_at = len(children)
+            for i, child in enumerate(children):
+                ctag = child_tag_name(child)
+                if order_index.get(ctag or "", 10_000) > node_order:
+                    insert_at = i
+                    break
+            children.insert(insert_at, node)
 
-    serialized = serialize_wordprocessingml(root)
-    if had_w_prefix and b"<w:" not in serialized:
-        raise RuntimeError("document.xml serialization dropped w: prefixes")
-    doc_path.write_bytes(serialized)
+        updated_sectpr = f"{open_tag}{''.join(children)}{close_tag}"
+        updated_xml = replace_nth_sectpr_block(updated_xml, idx, updated_sectpr)
+
+    ET.fromstring(updated_xml.encode("utf-8"))
+    doc_path.write_text(updated_xml, encoding="utf-8")
     log.append(f"Rewired sectPr header/footer references in {len(sectprs)} sections")
 
 
@@ -298,14 +357,16 @@ def _ensure_content_types(target_extract_dir: Path, part_to_type: Dict[str, str]
     log.append("Updated [Content_Types].xml for header/footer parts and media")
 
 
-def import_headers_footers(target_extract_dir: Path, registry: Dict[str, Any], log: List[str]) -> None:
+def import_headers_footers(target_extract_dir: Path, registry: Dict[str, Any], log: List[str]) -> HeaderFooterImportResult:
+    result = HeaderFooterImportResult()
     entries = _iter_hf_entries(registry)
     if not entries:
         log.append("No architect headers/footers in registry; skipping import")
-        return
+        return result
 
     _remove_existing_hf_files(target_extract_dir, log)
-    part_to_type = _write_hf_parts(target_extract_dir, entries, log)
+    part_to_type = _write_hf_parts(target_extract_dir, entries, log, result)
     part_to_rid = _rebuild_document_rels(target_extract_dir, part_to_type, log)
     _rewire_document_sectpr(target_extract_dir, registry, entries, part_to_rid, log)
     _ensure_content_types(target_extract_dir, part_to_type, entries, log)
+    return result

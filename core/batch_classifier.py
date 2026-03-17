@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import json
 import time
-from pathlib import Path
 from typing import Callable, Dict, List
 
 from core.classification import PHASE2_MASTER_PROMPT, coerce_to_final_classifications
@@ -25,8 +24,7 @@ class BatchClassificationError(RuntimeError):
 
 
 def _make_custom_id(filename: str, chunk_index: int) -> str:
-    file_stem = Path(filename).stem
-    return f"{file_stem}{_CHUNK_DELIMITER}{chunk_index}"
+    return f"{filename}{_CHUNK_DELIMITER}{chunk_index}"
 
 
 def _parse_custom_id(custom_id: str) -> tuple[str, int]:
@@ -151,8 +149,7 @@ def reassemble_file_classifications(
             continue
 
         expected_chunks = len(_split_bundle_into_chunks(slim_bundle))
-        file_stem = Path(filename).stem
-        entries = sorted(chunk_map.get(file_stem, []), key=lambda item: item[0])
+        entries = sorted(chunk_map.get(filename, []), key=lambda item: item[0])
 
         if len(entries) != expected_chunks:
             failed_files[filename] = f"expected {expected_chunks} chunks, got {len(entries)}"

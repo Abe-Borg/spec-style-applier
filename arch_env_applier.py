@@ -41,15 +41,19 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from core.registry import _check_xml_fragment
+from core.section_mapping import choose_section_sources
+from core.sectpr_tools import (
+    CANONICAL_SECTPR_ORDER,
+    child_tag_name,
+    extract_all_sectpr_blocks,
+    extract_sectpr_children,
+    extract_tag_block,
+    strip_tag_block,
+)
 
 
 MANAGED_LAYOUT_TAGS = ("pgSz", "pgMar", "cols", "docGrid")
-_CANONICAL_SECTPR_ORDER = [
-    "headerReference", "footerReference", "type", "pgSz", "pgMar", "paperSrc",
-    "pgBorders", "lnNumType", "pgNumType", "cols", "formProt", "vAlign",
-    "noEndnote", "titlePg", "textDirection", "bidi", "rtlGutter", "docGrid",
-    "printerSettings", "sectPrChange",
-]
+_CANONICAL_SECTPR_ORDER = CANONICAL_SECTPR_ORDER
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -477,42 +481,13 @@ def apply_font_table(
         log.append(f"WARNING: fontTable.xml may be malformed after mutation — {post_err}")
 
 
-def _extract_all_sectpr_blocks(document_xml: str) -> List[str]:
-    return re.findall(r"<w:sectPr\b[\s\S]*?</w:sectPr>", document_xml)
-
-
-def _extract_tag_block(xml: str, tag: str) -> Optional[str]:
-    self_closing = re.search(rf'(<w:{tag}\b[^>]*/>)', xml)
-    if self_closing:
-        return self_closing.group(1)
-    paired = re.search(rf'(<w:{tag}\b[^>]*>[\s\S]*?</w:{tag}>)', xml, flags=re.S)
-    return paired.group(1) if paired else None
-
-
-def _strip_tag_block(xml: str, tag: str) -> str:
-    xml = re.sub(rf'<w:{tag}\b[^>]*/>', '', xml)
-    return re.sub(rf'<w:{tag}\b[^>]*>[\s\S]*?</w:{tag}>', '', xml, flags=re.S)
-
-
 def _extract_layout_signature(sectpr: str) -> Dict[str, Optional[str]]:
-    pgmar = _extract_tag_block(sectpr, "pgMar") or ""
+    pgmar = extract_tag_block(sectpr, "pgMar") or ""
     attrs = {}
     for key in ("top", "right", "bottom", "left", "header", "footer"):
         m = re.search(rf'w:{key}="([^"]+)"', pgmar)
         attrs[key] = m.group(1) if m else None
     return attrs
-
-
-def _child_tag_name(child_xml: str) -> Optional[str]:
-    m = re.match(r'<w:([A-Za-z0-9]+)\b', child_xml)
-    return m.group(1) if m else None
-
-
-def _extract_sectpr_children(inner: str) -> List[str]:
-    children = []
-    for m in re.finditer(r'<w:[A-Za-z0-9]+\b[^>]*(?:/>|>[\s\S]*?</w:[A-Za-z0-9]+>)', inner):
-        children.append(m.group(0))
-    return children
 
 
 def _merge_managed_layout_tags(target_sectpr: str, source_sectpr: str) -> str:
@@ -526,11 +501,11 @@ def _merge_managed_layout_tags(target_sectpr: str, source_sectpr: str) -> str:
 
     # Remove managed tags from target and prepare source replacements.
     for tag in MANAGED_LAYOUT_TAGS:
-        inner = _strip_tag_block(inner, tag)
-    children = _extract_sectpr_children(inner)
+        inner = strip_tag_block(inner, tag)
+    children = extract_sectpr_children(inner)
 
     managed_children = {
-        tag: _extract_tag_block(source_sectpr, tag)
+        tag: extract_tag_block(source_sectpr, tag)
         for tag in MANAGED_LAYOUT_TAGS
     }
     index_by_tag = {tag: idx for idx, tag in enumerate(_CANONICAL_SECTPR_ORDER)}
@@ -543,7 +518,7 @@ def _merge_managed_layout_tags(target_sectpr: str, source_sectpr: str) -> str:
 
         insert_at = len(children)
         for i, child in enumerate(children):
-            child_tag = _child_tag_name(child)
+            child_tag = child_tag_name(child)
             if child_tag and index_by_tag.get(child_tag, 10_000) > target_order:
                 insert_at = i
                 break
@@ -553,21 +528,11 @@ def _merge_managed_layout_tags(target_sectpr: str, source_sectpr: str) -> str:
 
 
 def _choose_layout_sources(target_count: int, page_layout: Dict[str, Any], log: List[str]) -> List[str]:
-    section_chain = page_layout.get("section_chain") or []
-    chain_sectprs = [s.get("sectPr") for s in section_chain if isinstance(s, dict) and s.get("sectPr")]
-    default_section = page_layout.get("default_section") if isinstance(page_layout.get("default_section"), dict) else {}
-    default_sectpr = default_section.get("sectPr")
-
-    if target_count == len(chain_sectprs) and target_count > 0:
-        return chain_sectprs
-    if default_sectpr:
-        if target_count != len(chain_sectprs) and len(chain_sectprs) > 0:
-            log.append(
-                f"WARNING: target has {target_count} sectPr blocks but architect has {len(chain_sectprs)}; "
-                "applying architect default_section layout to final target section only"
-            )
-        return [""] * (target_count - 1) + [default_sectpr]
-    raise ValueError("Template registry missing page_layout.default_section.sectPr required for Phase 2 page layout sync")
+    sources = choose_section_sources(target_count, page_layout, require_default=True, log=log)
+    out: List[str] = []
+    for source in sources:
+        out.append(source.get("sectPr") if isinstance(source, dict) else "")
+    return out
 
 
 def apply_page_layout(target_extract_dir: Path, registry: Dict[str, Any], log: List[str]) -> None:
@@ -581,7 +546,7 @@ def apply_page_layout(target_extract_dir: Path, registry: Dict[str, Any], log: L
         return
 
     doc_xml = doc_path.read_text(encoding="utf-8")
-    target_sectprs = _extract_all_sectpr_blocks(doc_xml)
+    target_sectprs = extract_all_sectpr_blocks(doc_xml)
     if not target_sectprs:
         log.append("No sectPr blocks found in target document.xml; skipping page layout sync")
         return
@@ -754,7 +719,7 @@ def apply_environment_to_target(
     apply_doc_defaults_flag: bool = True,
     apply_fonts_flag: bool = True,
     apply_headers_footers_flag: bool = True,
-) -> None:
+) -> Dict[str, Any]:
     """
     Apply the formatting environment from arch_template_registry to target.
     
@@ -815,16 +780,23 @@ def apply_environment_to_target(
     log.append("\n[5/6] Applying page layout managed tags...")
     apply_page_layout(target_extract_dir, registry, log)
 
+    hf_result: Dict[str, Any] = {"part_names": set(), "rels_names": set(), "media_names": set()}
     if apply_headers_footers_flag:
         log.append("\n[6/6] Applying headers/footers...")
         from header_footer_importer import import_headers_footers
-        import_headers_footers(target_extract_dir, registry, log)
+        imported = import_headers_footers(target_extract_dir, registry, log)
+        hf_result = {
+            "part_names": set(imported.part_names),
+            "rels_names": set(imported.rels_names),
+            "media_names": set(imported.media_names),
+        }
     else:
         log.append("\n[6/6] Headers/footers application skipped")
     
     log.append("\n" + "=" * 60)
     log.append("END ENVIRONMENT APPLICATION")
     log.append("=" * 60)
+    return {"header_footer_import": hf_result}
 
 
 def get_style_def_by_id(registry: Dict[str, Any], style_id: str) -> Optional[Dict[str, Any]]:

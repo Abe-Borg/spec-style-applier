@@ -74,7 +74,7 @@ def test_import_headers_footers_replaces_parts_and_refs(tmp_path):
     assert not (extract / "word" / "header9.xml").exists()
     assert (extract / "word" / "header1.xml").exists()
     assert (extract / "word" / "footer1.xml").exists()
-    assert (extract / "word" / "media" / "logo.png").read_bytes() == b"png"
+    assert any(p.read_bytes() == b"png" for p in (extract / "word" / "media").iterdir())
 
     rels_xml = (extract / "word" / "_rels" / "document.xml.rels").read_text(encoding="utf-8")
     assert "relationships/header" in rels_xml
@@ -92,3 +92,50 @@ def test_import_headers_footers_replaces_parts_and_refs(tmp_path):
     assert "/word/header1.xml" in ct_xml
     assert "/word/footer1.xml" in ct_xml
     assert 'Extension="png"' in ct_xml
+
+def test_hf_rewire_preserves_unknown_document_prefixes(tmp_path):
+    extract = _seed_extract(tmp_path)
+    doc = (
+        '<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" '
+        'xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" '
+        'xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006" '
+        'xmlns:w14="http://schemas.microsoft.com/office/word/2010/wordml" mc:Ignorable="w14">'
+        '<w:body><w:p><w:r><w14:paraId w14:val="1234"/><w:t>x</w:t></w:r></w:p>'
+        '<w:sectPr><w:pgSz w:w="12240" w:h="15840"/></w:sectPr></w:body></w:document>'
+    )
+    (extract / "word" / "document.xml").write_text(doc, encoding="utf-8")
+    registry = {
+        "headers_footers": {"headers": [{"part_name": "word/header1.xml", "rid": "rId10", "xml": '<w:hdr xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"/>'}]},
+        "page_layout": {"default_section": {"header_refs": {"default": "rId10"}}},
+    }
+    log = []
+    import_headers_footers(extract, registry, log)
+    out = (extract / "word" / "document.xml").read_text(encoding="utf-8")
+    assert "xmlns:mc" in out and "xmlns:w14" in out
+    assert 'mc:Ignorable="w14"' in out
+    assert "<w14:paraId" in out
+
+
+def test_hf_media_import_does_not_overwrite_existing_body_media(tmp_path):
+    extract = _seed_extract(tmp_path)
+    media_dir = extract / "word" / "media"
+    media_dir.mkdir(parents=True, exist_ok=True)
+    (media_dir / "image1.png").write_bytes(b"body")
+
+    registry = {
+        "headers_footers": {
+            "headers": [{
+                "part_name": "word/header1.xml",
+                "rid": "rId10",
+                "xml": '<w:hdr xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"/>',
+                "rels_xml": '<?xml version="1.0" encoding="UTF-8"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="media/image1.png"/></Relationships>',
+                "media": [{"path": "media/image1.png", "content_base64": base64.b64encode(b"header").decode("ascii")}],
+            }]
+        },
+        "page_layout": {"default_section": {"header_refs": {"default": "rId10"}}},
+    }
+
+    result = import_headers_footers(extract, registry, [])
+    assert (media_dir / "image1.png").read_bytes() == b"body"
+    assert result.media_names
+    assert all(name.startswith("word/media/hf_") for name in result.media_names)

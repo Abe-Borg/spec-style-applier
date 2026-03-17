@@ -489,3 +489,41 @@ class TestBuiltinStyleSkipping:
 
         result_xml = (word_dir / "styles.xml").read_text(encoding="utf-8")
         assert 'w:styleId="CSI_Article__ARCH"' in result_xml
+
+def test_conflicting_existing_style_is_not_silently_skipped(tmp_path):
+    from core.style_import import import_arch_styles_into_target
+
+    word_dir = tmp_path / "word"
+    word_dir.mkdir()
+    (word_dir / "styles.xml").write_text(
+        '<w:styles xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">'
+        '<w:style w:type="paragraph" w:styleId="CSI"><w:rPr><w:b/></w:rPr></w:style>'
+        '</w:styles>',
+        encoding="utf-8",
+    )
+    arch = (
+        '<w:styles xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">'
+        '<w:style w:type="paragraph" w:styleId="CSI"><w:rPr><w:i/></w:rPr></w:style>'
+        '</w:styles>'
+    )
+    log = []
+    import_arch_styles_into_target(tmp_path, arch, ["CSI"], log)
+    out = (word_dir / "styles.xml").read_text(encoding="utf-8")
+    assert "<w:i/>" in out and "<w:b/>" not in out
+    assert any("Replaced conflicting" in m for m in log)
+
+
+def test_equivalent_existing_style_is_left_in_place(tmp_path):
+    from core.style_import import import_arch_styles_into_target
+
+    style_block = '<w:style w:type="paragraph" w:styleId="CSI"><w:rPr><w:b/></w:rPr></w:style>'
+    word_dir = tmp_path / "word"
+    word_dir.mkdir()
+    (word_dir / "styles.xml").write_text(
+        f'<w:styles xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">{style_block}</w:styles>',
+        encoding="utf-8",
+    )
+    arch = f'<w:styles xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">{style_block}</w:styles>'
+    log = []
+    import_arch_styles_into_target(tmp_path, arch, ["CSI"], log)
+    assert any("already matches" in m for m in log)
