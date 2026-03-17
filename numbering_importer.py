@@ -244,13 +244,17 @@ def inject_numbering_into_xml(
     """
     result = target_numbering_xml
 
-    # Find insertion point for abstractNums (before first <w:num>)
     first_num_match = re.search(r'<w:num\s', result)
-    if first_num_match:
-        insert_pos = first_num_match.start()
-        abstract_xml = "\n".join(an["xml"] for an in abstract_nums_to_import)
-        if abstract_xml:
-            result = result[:insert_pos] + abstract_xml + "\n" + result[insert_pos:]
+    end_match = re.search(r'</w:numbering>', result)
+    abstract_xml = "\n".join(an["xml"] for an in abstract_nums_to_import)
+    if abstract_xml:
+        if first_num_match:
+            insert_pos = first_num_match.start()
+        elif end_match:
+            insert_pos = end_match.start()
+        else:
+            raise ValueError("numbering.xml missing </w:numbering> closing tag")
+        result = result[:insert_pos] + abstract_xml + "\n" + result[insert_pos:]
 
     # Find insertion point for nums (before </w:numbering>)
     end_match = re.search(r'</w:numbering>', result)
@@ -259,6 +263,13 @@ def inject_numbering_into_xml(
         num_xml = "\n".join(n["xml"] for n in nums_to_import)
         if num_xml:
             result = result[:insert_pos] + num_xml + "\n" + result[insert_pos:]
+
+    for n in nums_to_import:
+        if "new_abstract_id" not in n:
+            continue
+        aid = str(n.get("new_abstract_id"))
+        if not re.search(rf'<w:abstractNum\b[^>]*w:abstractNumId="{re.escape(aid)}"', result):
+            raise ValueError(f"Injected num references missing abstractNumId={aid}")
 
     return result
 

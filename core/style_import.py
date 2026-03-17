@@ -337,6 +337,24 @@ def extract_style_block_raw(styles_xml_text: str, style_id: str) -> Optional[str
     return m.group(1) + "\n" if m else None
 
 
+def normalize_style_block_for_compare(style_block: str) -> str:
+    return re.sub(r"\s+", " ", style_block).strip()
+
+
+def style_blocks_equivalent(target_block: str, arch_block: str) -> bool:
+    return normalize_style_block_for_compare(target_block) == normalize_style_block_for_compare(arch_block)
+
+
+def replace_style_block(styles_xml_text: str, style_id: str, new_block: str) -> str:
+    sid = re.escape(style_id)
+    return re.sub(
+        rf'(<w:style\b[^>]*w:styleId="{sid}"[^>]*>[\s\S]*?</w:style>\n?)',
+        new_block,
+        styles_xml_text,
+        count=1,
+    )
+
+
 def import_arch_styles_into_target(
     target_extract_dir: Path,
     arch_styles_xml: str,
@@ -355,8 +373,7 @@ def import_arch_styles_into_target(
 
     arch_styles_text = arch_styles_xml
     tgt_styles_text = tgt_styles_path.read_text(encoding="utf-8")
-
-    existing = set(re.findall(r'w:styleId="([^"]+)"', tgt_styles_text))
+    original_tgt_styles_text = tgt_styles_text
 
     # Expand basedOn deps
     expanded: Set[str] = set()
@@ -364,19 +381,16 @@ def import_arch_styles_into_target(
         _collect_style_deps_from_arch(arch_styles_text, sid, expanded)
 
     blocks: List[str] = []
+    replaced_any = False
     missing: List[str] = []
     for sid in sorted(expanded):
-        if sid in existing:
-            continue
-
-        # Word built-in styles exist implicitly — skip them when absent
-        # from both architect and target rather than failing.
-        if sid in WORD_BUILTIN_STYLE_IDS:
-            log.append(f"Skipped built-in style dependency (implicit in Word): {sid}")
-            continue
-
         blk = extract_style_block_raw(arch_styles_text, sid)
         if not blk:
+            if sid in WORD_BUILTIN_STYLE_IDS:
+                if extract_style_block_raw(tgt_styles_text, sid):
+                    continue
+                log.append(f"Skipped built-in style dependency (implicit in Word): {sid}")
+                continue
             missing.append(sid)
             continue
 
@@ -402,8 +416,17 @@ def import_arch_styles_into_target(
         # HARDEN: make style self-contained (pPr/rPr) to prevent font drift
         blk = materialize_arch_style_block(blk, sid, arch_styles_text)
 
-        blocks.append(blk)
+        existing_blk = extract_style_block_raw(tgt_styles_text, sid)
+        if existing_blk:
+            if style_blocks_equivalent(existing_blk, blk):
+                log.append(f"Style already matches architect: {sid}")
+                continue
+            tgt_styles_text = replace_style_block(tgt_styles_text, sid, blk)
+            replaced_any = True
+            log.append(f"Replaced conflicting target style with architect definition: {sid}")
+            continue
 
+        blocks.append(blk)
         log.append(f"Imported style from architect: {sid}")
 
     # Priority-1 hardening: if the architect template is missing any required style or dependency,
@@ -415,11 +438,11 @@ def import_arch_styles_into_target(
             f"{missing_sorted}"
         )
 
-    if not blocks:
+    if not blocks and not replaced_any:
         return
 
     tgt_new = insert_styles_into_styles_xml(tgt_styles_text, blocks)
-    if tgt_new != tgt_styles_text:
+    if tgt_new != original_tgt_styles_text:
         tgt_styles_path.write_text(tgt_new, encoding="utf-8")
 
 

@@ -102,6 +102,12 @@ def verify_phase2_invariants(
     arch_headers = hf_data.get("headers", []) if isinstance(hf_data, dict) else []
     arch_footers = hf_data.get("footers", []) if isinstance(hf_data, dict) else []
 
+    if new_docx is not None:
+        before_rels = _read_docx_part(src_docx, "word/_rels/document.xml.rels").decode("utf-8", errors="strict")
+        after_rels = _read_docx_part(new_docx, "word/_rels/document.xml.rels").decode("utf-8", errors="strict")
+        if _extract_hf_relationship_subset(before_rels) != _extract_hf_relationship_subset(after_rels):
+            raise RuntimeError("INVARIANT FAIL: relationship subset changed")
+
     if new_docx is not None and (arch_headers or arch_footers):
         expected_parts = {
             item.get("part_name")

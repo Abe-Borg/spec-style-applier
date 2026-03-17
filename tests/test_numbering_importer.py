@@ -397,3 +397,20 @@ class TestHappyPath:
         # Target has numId=1, so the new numId must be > 1
         new_num_id = remap["CSILevel1"]["new_numId"]
         assert new_num_id > 1
+
+def test_inject_numbering_into_xml_when_target_has_no_num():
+    target = (
+        '<w:numbering xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">'
+        '<w:abstractNum w:abstractNumId="0"/>'
+        '</w:numbering>'
+    )
+    abstract = '<w:abstractNum w:abstractNumId="9"/>'
+    num = '<w:num w:numId="3"><w:abstractNumId w:val="9"/></w:num>'
+    out = inject_numbering_into_xml(target, [{"xml": abstract}], [{"xml": num, "new_abstract_id": 9}])
+    assert out.index(abstract) < out.index(num)
+
+
+def test_imported_nums_reference_existing_abstract_nums_after_injection():
+    target = '<w:numbering xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"></w:numbering>'
+    with pytest.raises(ValueError, match="missing abstractNumId"):
+        inject_numbering_into_xml(target, [], [{"xml": '<w:num w:numId="4"><w:abstractNumId w:val="88"/></w:num>', "new_abstract_id": 88}])
