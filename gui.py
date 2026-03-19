@@ -207,6 +207,21 @@ class Phase2GUI(ctk.CTk):
 
         self._build_ui()
 
+    def _resolve_initial_dir(current_value: str) -> Optional[str]:
+        """Return a valid starting directory from a field value, or None."""
+        if not current_value:
+            return None
+        p = Path(current_value)
+        if p.is_dir():
+            return str(p)
+        if p.is_file():
+            return str(p.parent)
+        # Path typed but not yet created — walk up until we find a real ancestor
+        for ancestor in p.parents:
+            if ancestor.is_dir():
+                return str(ancestor)
+        return None
+
     def _build_ui(self):
         main = ctk.CTkFrame(self, fg_color="transparent")
         main.pack(fill="both", expand=True, padx=24, pady=24)
@@ -488,12 +503,14 @@ class Phase2GUI(ctk.CTk):
             self.run_btn.configure(text="Run Phase 2")
 
     def _browse_target(self):
+        initial = self._resolve_initial_dir(self.target_var.get())
         if self._mode_var.get() == "Batch (folder)":
-            path = filedialog.askdirectory(title="Select folder with .docx files")
+            path = filedialog.askdirectory(title="Select folder with .docx files", initialdir = initial,)
         else:
             path = filedialog.askopenfilename(
                 title="Select Target Spec",
                 filetypes=[("Word Documents", "*.docx"), ("All Files", "*.*")],
+                initial = initial,
             )
         if path:
             self.target_var.set(path)
@@ -501,12 +518,14 @@ class Phase2GUI(ctk.CTk):
             self.output_dir_var.set(default_output)
 
     def _browse_arch(self):
-        path = filedialog.askdirectory(title="Select Architect Template Folder")
+        initial = self._resolve_initial_dir(self.arch_var.get())
+        path = filedialog.askdirectory(title="Select Architect Template Folder", initialdir = initial)
         if path:
             self.arch_var.set(path)
 
     def _browse_output_dir(self):
-        path = filedialog.askdirectory(title="Select Output Folder")
+        initial = self._resolve_initial_dir(self.output_dir_var.get())
+        path = filedialog.askdirectory(title="Select Output Folder", initialdir = initial,)
         if path:
             self.output_dir_var.set(path)
 
