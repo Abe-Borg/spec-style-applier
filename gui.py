@@ -511,7 +511,7 @@ class Phase2GUI(ctk.CTk):
             path = filedialog.askopenfilename(
                 title="Select Target Spec",
                 filetypes=[("Word Documents", "*.docx"), ("All Files", "*.*")],
-                initial = initial,
+                initialdir = initial,
             )
         if path:
             self.target_var.set(path)
