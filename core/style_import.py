@@ -19,7 +19,6 @@ WORD_BUILTIN_STYLE_IDS = frozenset({
     "NoList",
 })
 
-
 def _extract_style_block(styles_xml_text: str, style_id: str) -> Optional[str]:
     m = re.search(
         rf'(<w:style\b[^>]*w:styleId="{re.escape(style_id)}"[\s\S]*?</w:style>)',
@@ -28,16 +27,13 @@ def _extract_style_block(styles_xml_text: str, style_id: str) -> Optional[str]:
     )
     return m.group(1) if m else None
 
-
 def _extract_basedOn(style_block: str) -> Optional[str]:
     m = re.search(r'<w:basedOn\b[^>]*w:val="([^"]+)"', style_block)
     return m.group(1) if m else None
 
-
 def _extract_numpr_block(style_block: str) -> Optional[str]:
     m = re.search(r'(<w:numPr\b[^>]*>[\s\S]*?</w:numPr>)', style_block, flags=re.S)
     return m.group(1) if m else None
-
 
 def _find_style_numpr_in_chain(styles_xml_text: str, style_id: str, max_hops: int = 50) -> Optional[str]:
     seen = set()
@@ -55,51 +51,6 @@ def _find_style_numpr_in_chain(styles_xml_text: str, style_id: str, max_hops: in
         cur = _extract_basedOn(block)
     return None
 
-
-# DEPRECATED: Phase 2 no longer materializes style-linked numbering before style swaps
-# because paragraph-level numPr overrides architect style-level numbering in Word's cascade.
-# Kept for compatibility with tests and potential legacy workflows.
-def ensure_explicit_numpr_from_current_style(p_xml: str, styles_xml_text: str) -> str:
-    # never touch sectPr carrier paragraphs
-    if "<w:sectPr" in p_xml:
-        return p_xml
-
-    if _paragraph_has_numpr(p_xml):
-        return p_xml
-
-    cur_style = _paragraph_style_id(p_xml)
-    if not cur_style:
-        return p_xml
-
-    numpr = _find_style_numpr_in_chain(styles_xml_text, cur_style)
-    if not numpr:
-        return p_xml
-
-    # Prefer placing numPr right after existing pStyle (if present)
-    if re.search(r'(<w:pStyle\b[^>]*/>)', p_xml):
-        return re.sub(r'(<w:pStyle\b[^>]*/>)', rf"\1{numpr}", p_xml, count=1)
-
-    # Expand self-closing pPr
-    if re.search(r"<w:pPr\b[^>]*/>", p_xml):
-        return re.sub(r"<w:pPr\b[^>]*/>", f"<w:pPr>{numpr}</w:pPr>", p_xml, count=1)
-
-    # Insert into existing pPr
-    if "<w:pPr" in p_xml:
-        return re.sub(r'(<w:pPr\b[^>]*>)', rf"\1{numpr}", p_xml, count=1)
-
-    # Create pPr if missing
-    return re.sub(r'(<w:p\b[^>]*>)', rf"\1<w:pPr>{numpr}</w:pPr>", p_xml, count=1)
-
-
-def _paragraph_style_id(p_xml: str) -> Optional[str]:
-    m = re.search(r'<w:pStyle\b[^>]*w:val="([^"]+)"', p_xml)
-    return m.group(1) if m else None
-
-
-def _paragraph_has_numpr(p_xml: str) -> bool:
-    return "<w:numPr" in p_xml
-
-
 def _strip_pstyle_and_numpr(ppr_inner: str) -> str:
     if not ppr_inner:
         return ""
@@ -107,11 +58,9 @@ def _strip_pstyle_and_numpr(ppr_inner: str) -> str:
     out = re.sub(r"<w:numPr\b[^>]*>[\s\S]*?</w:numPr>", "", out, flags=re.S)
     return out.strip()
 
-
 def _extract_tag_inner(xml: str, tag: str) -> Optional[str]:
     m = re.search(rf"<{tag}\b[^>]*>([\s\S]*?)</{tag}>", xml, flags=re.S)
     return m.group(1) if m else None
-
 
 def _docdefaults_rpr_inner(styles_xml_text: str) -> str:
     m = re.search(
@@ -121,7 +70,6 @@ def _docdefaults_rpr_inner(styles_xml_text: str) -> str:
     )
     return m.group(1).strip() if m else ""
 
-
 def _docdefaults_ppr_inner(styles_xml_text: str) -> str:
     m = re.search(
         r"<w:docDefaults\b[\s\S]*?<w:pPrDefault\b[\s\S]*?<w:pPr\b[^>]*>([\s\S]*?)</w:pPr>[\s\S]*?</w:pPrDefault>",
@@ -129,7 +77,6 @@ def _docdefaults_ppr_inner(styles_xml_text: str) -> str:
         flags=re.S
     )
     return _strip_pstyle_and_numpr(m.group(1).strip()) if m else ""
-
 
 def _effective_rpr_inner_in_arch(arch_styles_xml_text: str, style_id: str) -> str:
     """
@@ -186,7 +133,6 @@ def _effective_rpr_inner_in_arch(arch_styles_xml_text: str, style_id: str) -> st
 
     return "".join(nodes)
 
-
 def _effective_ppr_inner_in_arch(arch_styles_xml_text: str, style_id: str) -> str:
     seen = set()
     cur = style_id
@@ -203,14 +149,11 @@ def _effective_ppr_inner_in_arch(arch_styles_xml_text: str, style_id: str) -> st
         cur = _extract_basedOn(blk)
     return _docdefaults_ppr_inner(arch_styles_xml_text)
 
-
 def _rpr_contains_tag(rpr_inner: str, tag: str) -> bool:
     return re.search(rf"<w:{re.escape(tag)}\b", rpr_inner) is not None
 
-
 def _extract_rpr_inner(style_block: str) -> Optional[str]:
     return _extract_tag_inner(style_block, "w:rPr")
-
 
 def _inject_missing_rpr_children(style_block: str, missing_children_xml: str) -> str:
     """Insert missing rPr children (already as raw XML) just before </w:rPr>."""
@@ -220,7 +163,6 @@ def _inject_missing_rpr_children(style_block: str, missing_children_xml: str) ->
         return style_block
     # Replace only the first closing tag (avoid accidental insertion into nested rPr blocks)
     return style_block.replace("</w:rPr>", f"{missing_children_xml}</w:rPr>", 1)
-
 
 def _materialize_minimal_typography(style_block: str, style_id: str, arch_styles_xml_text: str) -> str:
     """
@@ -274,7 +216,6 @@ def _materialize_minimal_typography(style_block: str, style_id: str, arch_styles
     insertion = "".join(missing_nodes)
     return _inject_missing_rpr_children(style_block, insertion)
 
-
 def materialize_arch_style_block(style_block: str, style_id: str, arch_styles_xml_text: str) -> str:
     """
     Phase 2: import-time style hardening.
@@ -305,7 +246,6 @@ def materialize_arch_style_block(style_block: str, style_id: str, arch_styles_xm
 
     return style_block
 
-
 def _collect_style_deps_from_arch(arch_styles_text: str, style_id: str, seen: Set[str]) -> None:
     """
     Recursively collect styleId dependencies via basedOn, link, and next references.
@@ -325,7 +265,6 @@ def _collect_style_deps_from_arch(arch_styles_text: str, style_id: str, seen: Se
             if ref and ref not in seen:
                 _collect_style_deps_from_arch(arch_styles_text, ref, seen)
 
-
 def extract_style_block_raw(styles_xml_text: str, style_id: str) -> Optional[str]:
     """
     Extract the raw <w:style ...>...</w:style> block for a given styleId using regex.
@@ -336,14 +275,11 @@ def extract_style_block_raw(styles_xml_text: str, style_id: str) -> Optional[str
     m = re.search(rf'(<w:style\b[^>]*w:styleId="{sid}"[^>]*>[\s\S]*?</w:style>)', styles_xml_text)
     return m.group(1) + "\n" if m else None
 
-
 def normalize_style_block_for_compare(style_block: str) -> str:
     return re.sub(r"\s+", " ", style_block).strip()
 
-
 def style_blocks_equivalent(target_block: str, arch_block: str) -> bool:
     return normalize_style_block_for_compare(target_block) == normalize_style_block_for_compare(arch_block)
-
 
 def replace_style_block(styles_xml_text: str, style_id: str, new_block: str) -> str:
     sid = re.escape(style_id)
@@ -353,7 +289,6 @@ def replace_style_block(styles_xml_text: str, style_id: str, new_block: str) -> 
         styles_xml_text,
         count=1,
     )
-
 
 def import_arch_styles_into_target(
     target_extract_dir: Path,
@@ -444,7 +379,6 @@ def import_arch_styles_into_target(
     tgt_new = insert_styles_into_styles_xml(tgt_styles_text, blocks)
     if tgt_new != original_tgt_styles_text:
         tgt_styles_path.write_text(tgt_new, encoding="utf-8")
-
 
 def insert_styles_into_styles_xml(styles_xml_text: str, style_blocks: List[str]) -> str:
     if not style_blocks:
