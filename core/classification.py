@@ -75,6 +75,15 @@ BOILERPLATE_PATTERNS = [
     (r'(?i)^Flexible elastomeric and polyolefin thicknesses are limited.*$', 'masterspec_instruction'),
     (r'(?i)^To comply with ASHRAE.*insulation should have.*$', 'masterspec_instruction'),
     (r'(?i)^Architect should be prepared to reject.*$', 'masterspec_instruction'),
+    (r'(?i)^Retain [^\n]*remaining after.*$', 'masterspec_instruction'),
+    (r'(?i)^Paragraph below is defined in Section.*$', 'masterspec_instruction'),
+    (r'(?i)^.*requires calculating and detailing at each use.*$', 'masterspec_instruction'),
+    (r'(?i)^Verify suitability of.*$', 'masterspec_instruction'),
+    (r'(?i)^Specify parts in [^\n]*subparagraph.*$', 'masterspec_instruction'),
+    (r'(?i)^Specify parts in first.*$', 'masterspec_instruction'),
+    (r'(?i)^Option:\s+[^\n]*may be used.*$', 'masterspec_instruction'),
+    (r"(?i)^.*catalogs indicate.*$", 'masterspec_instruction'),
+    (r'(?i)^High-compressive-strength inserts may permit.*$', 'masterspec_instruction'),
 
     # Copyright notices
     (r'(?i)^Copyright\s*©?\s*\d{4}.*$', 'copyright'),
