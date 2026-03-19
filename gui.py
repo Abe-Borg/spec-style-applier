@@ -207,6 +207,7 @@ class Phase2GUI(ctk.CTk):
 
         self._build_ui()
 
+    @staticmethod
     def _resolve_initial_dir(current_value: str) -> Optional[str]:
         """Return a valid starting directory from a field value, or None."""
         if not current_value:
