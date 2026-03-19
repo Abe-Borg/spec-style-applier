@@ -546,10 +546,6 @@ def apply_page_layout(target_extract_dir: Path, registry: Dict[str, Any], log: L
 
     doc_path.write_text(updated_xml, encoding="utf-8")
 
-# ─────────────────────────────────────────────────────────────────────────────
-# Style materialization helpers (for styles not already in target)
-# ─────────────────────────────────────────────────────────────────────────────
-
 def apply_environment_to_target(
     target_extract_dir: Path,
     registry: Dict[str, Any],
