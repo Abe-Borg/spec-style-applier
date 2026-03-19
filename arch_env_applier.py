@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """
 arch_env_applier.py — Phase 2 Environment Application
 
@@ -51,10 +50,8 @@ from core.sectpr_tools import (
     strip_tag_block,
 )
 
-
 MANAGED_LAYOUT_TAGS = ("pgSz", "pgMar", "cols", "docGrid")
 _CANONICAL_SECTPR_ORDER = CANONICAL_SECTPR_ORDER
-
 
 # ─────────────────────────────────────────────────────────────────────────────
 # docDefaults application
@@ -64,7 +61,6 @@ def _extract_doc_defaults_block(styles_xml: str) -> Optional[str]:
     """Extract existing <w:docDefaults>...</w:docDefaults> block."""
     m = re.search(r'(<w:docDefaults\b[\s\S]*?</w:docDefaults>)', styles_xml)
     return m.group(1) if m else None
-
 
 def _build_doc_defaults_block(
     default_rpr: Optional[str],
@@ -87,7 +83,6 @@ def _build_doc_defaults_block(
     
     parts.append("</w:docDefaults>")
     return "\n".join(parts)
-
 
 def apply_doc_defaults(
     styles_xml: str,
@@ -132,7 +127,6 @@ def apply_doc_defaults(
     
     return styles_xml
 
-
 # ─────────────────────────────────────────────────────────────────────────────
 # Theme application
 # ─────────────────────────────────────────────────────────────────────────────
@@ -172,7 +166,6 @@ def apply_theme(
     
     theme_path.write_text(theme_xml, encoding="utf-8")
 
-
 def _ensure_theme_in_content_types(extract_dir: Path, log: List[str]) -> None:
     """Ensure [Content_Types].xml has an entry for theme1.xml."""
     ct_path = extract_dir / "[Content_Types].xml"
@@ -196,7 +189,6 @@ def _ensure_theme_in_content_types(extract_dir: Path, log: List[str]) -> None:
         ct_xml = ct_xml.replace("</Types>", f"  {theme_override}\n</Types>")
         ct_path.write_text(ct_xml, encoding="utf-8")
         log.append("Added theme1.xml to [Content_Types].xml")
-
 
 def _ensure_theme_in_rels(extract_dir: Path, log: List[str]) -> None:
     """Ensure word/_rels/document.xml.rels has a relationship for theme."""
@@ -226,7 +218,6 @@ def _ensure_theme_in_rels(extract_dir: Path, log: List[str]) -> None:
         rels_path.write_text(rels_xml, encoding="utf-8")
         log.append(f"Added theme relationship ({new_rid}) to document.xml.rels")
 
-
 # ─────────────────────────────────────────────────────────────────────────────
 # Settings plumbing helpers
 # ─────────────────────────────────────────────────────────────────────────────
@@ -238,7 +229,6 @@ _MINIMAL_SETTINGS_XML = (
     ' xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">'
     '\n</w:settings>'
 )
-
 
 def _ensure_settings_in_content_types(extract_dir: Path, log: List[str]) -> None:
     """Ensure [Content_Types].xml has an entry for settings.xml."""
@@ -260,7 +250,6 @@ def _ensure_settings_in_content_types(extract_dir: Path, log: List[str]) -> None
         ct_xml = ct_xml.replace("</Types>", f"  {settings_override}\n</Types>")
         ct_path.write_text(ct_xml, encoding="utf-8")
         log.append("Added settings.xml to [Content_Types].xml")
-
 
 def _ensure_settings_in_rels(extract_dir: Path, log: List[str]) -> None:
     """Ensure word/_rels/document.xml.rels has a relationship for settings."""
@@ -288,7 +277,6 @@ def _ensure_settings_in_rels(extract_dir: Path, log: List[str]) -> None:
         rels_path.write_text(rels_xml, encoding="utf-8")
         log.append(f"Added settings relationship ({new_rid}) to document.xml.rels")
 
-
 # ─────────────────────────────────────────────────────────────────────────────
 # Font table plumbing helpers
 # ─────────────────────────────────────────────────────────────────────────────
@@ -313,7 +301,6 @@ def _ensure_font_table_in_content_types(extract_dir: Path, log: List[str]) -> No
         ct_xml = ct_xml.replace("</Types>", f"  {font_override}\n</Types>")
         ct_path.write_text(ct_xml, encoding="utf-8")
         log.append("Added fontTable.xml to [Content_Types].xml")
-
 
 def _ensure_font_table_in_rels(extract_dir: Path, log: List[str]) -> None:
     """Ensure word/_rels/document.xml.rels has a relationship for fontTable."""
@@ -340,7 +327,6 @@ def _ensure_font_table_in_rels(extract_dir: Path, log: List[str]) -> None:
         rels_xml = rels_xml.replace("</Relationships>", f"  {font_rel}\n</Relationships>")
         rels_path.write_text(rels_xml, encoding="utf-8")
         log.append(f"Added fontTable relationship ({new_rid}) to document.xml.rels")
-
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Settings/compat application
@@ -411,7 +397,6 @@ def apply_settings(
     if post_err:
         log.append(f"WARNING: settings.xml may be malformed after mutation — {post_err}")
 
-
 # ─────────────────────────────────────────────────────────────────────────────
 # Font table application
 # ─────────────────────────────────────────────────────────────────────────────
@@ -480,7 +465,6 @@ def apply_font_table(
     if post_err:
         log.append(f"WARNING: fontTable.xml may be malformed after mutation — {post_err}")
 
-
 def _extract_layout_signature(sectpr: str) -> Dict[str, Optional[str]]:
     pgmar = extract_tag_block(sectpr, "pgMar") or ""
     attrs = {}
@@ -488,7 +472,6 @@ def _extract_layout_signature(sectpr: str) -> Dict[str, Optional[str]]:
         m = re.search(rf'w:{key}="([^"]+)"', pgmar)
         attrs[key] = m.group(1) if m else None
     return attrs
-
 
 def _merge_managed_layout_tags(target_sectpr: str, source_sectpr: str) -> str:
     open_tag_m = re.match(r'(<w:sectPr\b[^>]*>)', target_sectpr)
@@ -526,14 +509,12 @@ def _merge_managed_layout_tags(target_sectpr: str, source_sectpr: str) -> str:
 
     return f"{open_tag}{''.join(children)}{close_tag}"
 
-
 def _choose_layout_sources(target_count: int, page_layout: Dict[str, Any], log: List[str]) -> List[str]:
     sources = choose_section_sources(target_count, page_layout, require_default=True, log=log)
     out: List[str] = []
     for source in sources:
         out.append(source.get("sectPr") if isinstance(source, dict) else "")
     return out
-
 
 def apply_page_layout(target_extract_dir: Path, registry: Dict[str, Any], log: List[str]) -> None:
     page_layout = registry.get("page_layout")
@@ -565,149 +546,8 @@ def apply_page_layout(target_extract_dir: Path, registry: Dict[str, Any], log: L
 
     doc_path.write_text(updated_xml, encoding="utf-8")
 
-
 # ─────────────────────────────────────────────────────────────────────────────
 # Style materialization helpers (for styles not already in target)
-# ─────────────────────────────────────────────────────────────────────────────
-
-def resolve_effective_rpr(
-    style_id: str,
-    style_defs: List[Dict[str, Any]],
-    doc_defaults: Dict[str, Any],
-    force_tags: tuple = ("rFonts", "sz", "szCs", "lang")
-) -> str:
-    """
-    Resolve effective rPr for a style by walking basedOn chain + docDefaults.
-    Returns raw XML string with just the force tags.
-    """
-    # Build lookup
-    by_id = {s["style_id"]: s for s in style_defs}
-    
-    def _extract_child(rpr_xml: Optional[str], tag: str) -> Optional[str]:
-        if not rpr_xml:
-            return None
-        # Self-closing
-        m = re.search(rf'(<w:{tag}\b[^>]*/>)', rpr_xml)
-        if m:
-            return m.group(1)
-        # Paired
-        m = re.search(rf'(<w:{tag}\b[^>]*>[\s\S]*?</w:{tag}>)', rpr_xml, re.S)
-        if m:
-            return m.group(1)
-        return None
-    
-    resolved = {}
-    
-    for tag in force_tags:
-        # Walk basedOn chain
-        seen = set()
-        cur = style_id
-        found = None
-        
-        while cur and cur not in seen:
-            seen.add(cur)
-            style_def = by_id.get(cur)
-            if not style_def:
-                break
-            
-            rpr = style_def.get("rPr")
-            node = _extract_child(rpr, tag)
-            if node:
-                found = node
-                break
-            
-            cur = style_def.get("based_on")
-        
-        # Fall back to docDefaults
-        if not found:
-            default_rpr = doc_defaults.get("default_run_props", {}).get("rPr")
-            found = _extract_child(default_rpr, tag)
-        
-        if found:
-            resolved[tag] = found
-    
-    return "".join(resolved.values())
-
-
-def materialize_style_for_import(
-    style_def: Dict[str, Any],
-    all_style_defs: List[Dict[str, Any]],
-    doc_defaults: Dict[str, Any]
-) -> str:
-    """
-    Build a complete <w:style> block with materialized typography.
-    
-    This ensures the style is self-contained enough to render correctly
-    without depending on the basedOn chain or docDefaults being present.
-    """
-    style_id = style_def["style_id"]
-    style_type = style_def.get("type", "paragraph")
-    name = style_def.get("name", style_id)
-    based_on = style_def.get("based_on")
-    next_style = style_def.get("next")
-    link = style_def.get("link")
-    
-    # Start building style block
-    attrs = f'w:type="{style_type}" w:styleId="{style_id}"'
-    if style_def.get("qformat"):
-        attrs += ' w:customStyle="1"'
-    
-    parts = [f'<w:style {attrs}>']
-    parts.append(f'  <w:name w:val="{name}"/>')
-    
-    if based_on:
-        parts.append(f'  <w:basedOn w:val="{based_on}"/>')
-    if next_style:
-        parts.append(f'  <w:next w:val="{next_style}"/>')
-    if link:
-        parts.append(f'  <w:link w:val="{link}"/>')
-    if style_def.get("ui_priority") is not None:
-        parts.append(f'  <w:uiPriority w:val="{style_def["ui_priority"]}"/>')
-    if style_def.get("qformat"):
-        parts.append('  <w:qFormat/>')
-    
-    # Add pPr (strip numPr to avoid list conflicts)
-    ppr = style_def.get("pPr")
-    if ppr:
-        # Strip numPr from pPr
-        ppr = re.sub(r'<w:numPr\b[^>]*>[\s\S]*?</w:numPr>', '', ppr, flags=re.S)
-        if ppr.strip():
-            parts.append(f'  {ppr}')
-    
-    # Add rPr with materialized typography
-    rpr = style_def.get("rPr") or ""
-    effective_rpr = resolve_effective_rpr(style_id, all_style_defs, doc_defaults)
-    
-    if effective_rpr:
-        if rpr:
-            # Merge: inject missing tags from effective_rpr
-            for tag in ("rFonts", "sz", "szCs", "lang"):
-                if f"<w:{tag}" not in rpr:
-                    node_m = re.search(rf'(<w:{tag}\b[^/>]*(?:/>|>[\s\S]*?</w:{tag}>))', effective_rpr)
-                    if node_m:
-                        # Insert before </w:rPr>
-                        rpr = rpr.replace("</w:rPr>", f"{node_m.group(1)}</w:rPr>")
-            parts.append(f'  {rpr}')
-        else:
-            parts.append(f'  <w:rPr>{effective_rpr}</w:rPr>')
-    elif rpr:
-        parts.append(f'  {rpr}')
-    
-    # Table properties if present
-    if style_def.get("tblPr"):
-        parts.append(f'  {style_def["tblPr"]}')
-    if style_def.get("trPr"):
-        parts.append(f'  {style_def["trPr"]}')
-    if style_def.get("tcPr"):
-        parts.append(f'  {style_def["tcPr"]}')
-    
-    parts.append('</w:style>')
-    
-    return "\n".join(parts)
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# Main environment application
 # ─────────────────────────────────────────────────────────────────────────────
 
 def apply_environment_to_target(
@@ -797,135 +637,3 @@ def apply_environment_to_target(
     log.append("END ENVIRONMENT APPLICATION")
     log.append("=" * 60)
     return {"header_footer_import": hf_result}
-
-
-def get_style_def_by_id(registry: Dict[str, Any], style_id: str) -> Optional[Dict[str, Any]]:
-    """Look up a style definition from the registry by styleId."""
-    style_defs = registry.get("styles", {}).get("style_defs", [])
-    for sd in style_defs:
-        if sd.get("style_id") == style_id:
-            return sd
-    return None
-
-
-def get_styles_with_dependencies(
-    registry: Dict[str, Any],
-    needed_style_ids: List[str]
-) -> List[Dict[str, Any]]:
-    """
-    Get style definitions including basedOn dependencies.
-    Returns styles in dependency order (base styles first).
-    """
-    style_defs = registry.get("styles", {}).get("style_defs", [])
-    by_id = {s["style_id"]: s for s in style_defs}
-    
-    # Expand dependencies
-    expanded = set()
-    to_process = list(needed_style_ids)
-    
-    while to_process:
-        sid = to_process.pop()
-        if sid in expanded:
-            continue
-        expanded.add(sid)
-        
-        sd = by_id.get(sid)
-        if sd and sd.get("based_on"):
-            to_process.append(sd["based_on"])
-    
-    # Sort by dependency order (styles with no basedOn first)
-    result = []
-    remaining = list(expanded)
-    added = set()
-    
-    # Simple topological sort
-    max_iterations = len(remaining) * 2
-    iterations = 0
-    while remaining and iterations < max_iterations:
-        iterations += 1
-        for sid in list(remaining):
-            sd = by_id.get(sid)
-            if not sd:
-                remaining.remove(sid)
-                continue
-            
-            base = sd.get("based_on")
-            if not base or base in added or base not in expanded:
-                result.append(sd)
-                added.add(sid)
-                remaining.remove(sid)
-    
-    # Add any remaining (shouldn't happen with valid data)
-    for sid in remaining:
-        sd = by_id.get(sid)
-        if sd:
-            result.append(sd)
-    
-    return result
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# CLI (for testing)
-# ─────────────────────────────────────────────────────────────────────────────
-
-def main():
-    import argparse
-    import json
-    
-    parser = argparse.ArgumentParser(
-        description="Apply arch_template_registry.json environment to target document"
-    )
-    parser.add_argument(
-        "target_dir",
-        help="Path to extracted target document folder"
-    )
-    parser.add_argument(
-        "registry",
-        help="Path to arch_template_registry.json"
-    )
-    parser.add_argument(
-        "--no-theme", action="store_true",
-        help="Skip theme application"
-    )
-    parser.add_argument(
-        "--no-settings", action="store_true",
-        help="Skip settings/compat application"
-    )
-    parser.add_argument(
-        "--no-fonts", action="store_true",
-        help="Skip font table application"
-    )
-    parser.add_argument(
-        "--no-doc-defaults", action="store_true",
-        help="Skip docDefaults application"
-    )
-    
-    args = parser.parse_args()
-    
-    target_dir = Path(args.target_dir)
-    if not target_dir.exists():
-        raise FileNotFoundError(f"Target directory not found: {target_dir}")
-    
-    registry_path = Path(args.registry)
-    if not registry_path.exists():
-        raise FileNotFoundError(f"Registry not found: {registry_path}")
-    
-    registry = json.loads(registry_path.read_text(encoding="utf-8"))
-    
-    log: List[str] = []
-    
-    apply_environment_to_target(
-        target_extract_dir=target_dir,
-        registry=registry,
-        log=log,
-        apply_theme_flag=not args.no_theme,
-        apply_settings_flag=not args.no_settings,
-        apply_fonts_flag=not args.no_fonts,
-        apply_doc_defaults_flag=not args.no_doc_defaults,
-    )
-    
-    print("\n".join(log))
-
-
-if __name__ == "__main__":
-    main()

@@ -9,16 +9,13 @@ import re
 import html
 from typing import Dict, Any, Optional, Tuple, Generator
 
-
 W_NS = "http://schemas.openxmlformats.org/wordprocessingml/2006/main"
-
 
 def iter_paragraph_xml_blocks(document_xml_text: str) -> Generator[Tuple[int, int, str], None, None]:
     # Non-greedy paragraph blocks. Works well for DOCX document.xml.
     # NOTE: This intentionally avoids parsing full XML to keep indices aligned with raw text.
     for m in re.finditer(r"(<w:p\b[\s\S]*?</w:p>)", document_xml_text):
         yield m.start(), m.end(), m.group(1)
-
 
 def paragraph_text_from_block(p_xml: str) -> str:
     texts = re.findall(r"<w:t\b[^>]*>([\s\S]*?)</w:t>", p_xml)
@@ -28,15 +25,12 @@ def paragraph_text_from_block(p_xml: str) -> str:
     joined = re.sub(r"\s+", " ", joined).strip()
     return joined
 
-
 def paragraph_contains_sectpr(p_xml: str) -> bool:
     return "<w:sectPr" in p_xml
-
 
 def paragraph_pstyle_from_block(p_xml: str) -> Optional[str]:
     m = re.search(r"<w:pStyle\b[^>]*w:val=\"([^\"]+)\"", p_xml)
     return m.group(1) if m else None
-
 
 def paragraph_numpr_from_block(p_xml: str) -> Dict[str, Optional[str]]:
     numId = None
@@ -46,7 +40,6 @@ def paragraph_numpr_from_block(p_xml: str) -> Dict[str, Optional[str]]:
     if m1: numId = m1.group(1)
     if m2: ilvl = m2.group(1)
     return {"numId": numId, "ilvl": ilvl}
-
 
 def paragraph_ppr_hints_from_block(p_xml: str) -> Dict[str, Any]:
     # lightweight hints (alignment + ind + spacing)
@@ -69,7 +62,6 @@ def paragraph_ppr_hints_from_block(p_xml: str) -> Dict[str, Any]:
     if spacing:
         hints["spacing"] = spacing
     return hints
-
 
 def apply_pstyle_to_paragraph_block(p_xml: str, styleId: str) -> str:
     # refuse to touch sectPr paragraph
@@ -114,7 +106,6 @@ def apply_pstyle_to_paragraph_block(p_xml: str, styleId: str) -> str:
         count=1
     )
     return p_xml
-
 
 def strip_run_font_formatting(p_xml: str) -> str:
     """
@@ -179,9 +170,7 @@ def strip_run_font_formatting(p_xml: str) -> str:
 
     return result
 
-
 _DIRECT_PPR_OVERRIDE_TAGS = ("jc", "ind", "spacing", "numPr")
-
 
 def strip_conflicting_direct_ppr(p_xml: str) -> str:
     """
@@ -206,12 +195,3 @@ def strip_conflicting_direct_ppr(p_xml: str) -> str:
         return ppr
 
     return re.sub(r'<w:pPr\b[^>]*>[\s\S]*?</w:pPr>', _strip_from_ppr, p_xml, count=1, flags=re.S)
-
-
-def _paragraph_style_id(p_xml: str) -> Optional[str]:
-    m = re.search(r'<w:pStyle\b[^>]*w:val="([^"]+)"', p_xml)
-    return m.group(1) if m else None
-
-
-def _paragraph_has_numpr(p_xml: str) -> bool:
-    return "<w:numPr" in p_xml
