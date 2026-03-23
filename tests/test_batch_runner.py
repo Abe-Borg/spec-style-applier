@@ -14,7 +14,6 @@ def test_run_batch_concurrent_sorts_results_and_calls_callback(monkeypatch):
         available_roles,
         api_key,
         output_dir,
-        extract_base_dir=Path("output"),
         model="claude-opus-4-6",
     ):
         return BatchResult(

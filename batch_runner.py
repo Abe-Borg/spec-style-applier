@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+import tempfile
 import time
 import zipfile
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -121,7 +122,6 @@ def process_single_file(
     available_roles: List[str],
     api_key: str,
     output_dir: Path,
-    extract_base_dir: Path = Path("output"),
     model: str = "claude-opus-4-6",
 ) -> BatchResult:
     start = time.monotonic()
@@ -130,147 +130,145 @@ def process_single_file(
     output_path: Optional[Path] = None
 
     try:
-        digest = hashlib.sha256(str(docx_path.resolve()).encode("utf-8")).hexdigest()[:8]
-        extract_dir_name = f"{docx_path.stem}_{digest}_extracted"
+        with tempfile.TemporaryDirectory(prefix="phase2_") as tmp_root:
+            digest = hashlib.sha256(str(docx_path.resolve()).encode("utf-8")).hexdigest()[:8]
+            extract_dir_name = f"{docx_path.stem}_{digest}_extracted"
 
-        per_file_log.append("Extracting DOCX...")
-        decomposer = DocxDecomposer(str(docx_path))
-        extract_dir = decomposer.extract(output_dir=extract_base_dir / extract_dir_name)
+            per_file_log.append("Extracting DOCX...")
+            decomposer = DocxDecomposer(str(docx_path))
+            extract_dir = decomposer.extract(output_dir=Path(tmp_root) / extract_dir_name)
 
-        per_file_log.append("Building slim bundle...")
-        bundle = build_phase2_slim_bundle(extract_dir, available_roles=available_roles)
-        unresolved = len(bundle.get("paragraphs", []))
-        deterministic = len(bundle.get("deterministic_classifications", []))
-        per_file_log.append(
-            f"Built slim bundle: {unresolved} unresolved + {deterministic} deterministic"
-        )
+            per_file_log.append("Building slim bundle...")
+            bundle = build_phase2_slim_bundle(extract_dir, available_roles=available_roles)
+            unresolved = len(bundle.get("paragraphs", []))
+            deterministic = len(bundle.get("deterministic_classifications", []))
+            per_file_log.append(
+                f"Built slim bundle: {unresolved} unresolved + {deterministic} deterministic"
+            )
 
-        if unresolved > 0 and not api_key:
-            raise ValueError("Anthropic API key is required when unresolved paragraphs exist.")
+            if unresolved > 0 and not api_key:
+                raise ValueError("Anthropic API key is required when unresolved paragraphs exist.")
 
-        per_file_log.append("Classifying with LLM...")
-        classifications = classify_target_document(
-            slim_bundle=bundle,
-            available_roles=available_roles,
-            api_key=api_key,
-            model=model,
-        )
+            per_file_log.append("Classifying with LLM...")
+            classifications = classify_target_document(
+                slim_bundle=bundle,
+                available_roles=available_roles,
+                api_key=api_key,
+                model=model,
+            )
 
-        classifications_path = extract_dir / "phase2_classifications.json"
-        classifications_path.write_text(json.dumps(classifications, indent=2), encoding="utf-8")
-        per_file_log.append(f"Classifications saved: {classifications_path}")
+            classifications_path = extract_dir / "phase2_classifications.json"
+            classifications_path.write_text(json.dumps(classifications, indent=2), encoding="utf-8")
+            per_file_log.append(f"Classifications saved: {classifications_path}")
 
-        env_result = apply_environment_to_target(target_extract_dir=extract_dir, registry=env_registry, log=per_file_log)
-        per_file_log.append("Applied environment")
+            env_result = apply_environment_to_target(target_extract_dir=extract_dir, registry=env_registry, log=per_file_log)
+            per_file_log.append("Applied environment")
 
-        used_roles = {
-            item.get("csi_role")
-            for item in classifications.get("classifications", [])
-            if isinstance(item, dict) and isinstance(item.get("csi_role"), str)
-        }
-        needed_style_ids = sorted({arch_registry[r] for r in used_roles if r in arch_registry})
+            used_roles = {
+                item.get("csi_role")
+                for item in classifications.get("classifications", [])
+                if isinstance(item, dict) and isinstance(item.get("csi_role"), str)
+            }
+            needed_style_ids = sorted({arch_registry[r] for r in used_roles if r in arch_registry})
 
-        style_numid_remap = {}
-        if HAS_NUMBERING_IMPORTER:
-            style_numid_remap = import_numbering(
+            style_numid_remap = {}
+            if HAS_NUMBERING_IMPORTER:
+                style_numid_remap = import_numbering(
+                    target_extract_dir=extract_dir,
+                    arch_template_registry=env_registry,
+                    arch_styles_xml=arch_styles_xml,
+                    style_ids_to_import=needed_style_ids,
+                    log=per_file_log,
+                )
+            else:
+                _check_numbering_module_needed(arch_styles_xml, needed_style_ids)
+
+            import_arch_styles_into_target(
                 target_extract_dir=extract_dir,
-                arch_template_registry=env_registry,
                 arch_styles_xml=arch_styles_xml,
-                style_ids_to_import=needed_style_ids,
+                needed_style_ids=needed_style_ids,
+                log=per_file_log,
+                style_numid_remap=style_numid_remap,
+            )
+            per_file_log.append(f"Imported {len(needed_style_ids)} styles")
+
+            snap = snapshot_stability(extract_dir)
+            apply_report = apply_phase2_classifications(
+                extract_dir=extract_dir,
+                classifications=classifications,
+                arch_style_registry=arch_registry,
                 log=per_file_log,
             )
-        else:
-            _check_numbering_module_needed(arch_styles_xml, needed_style_ids)
+            verify_stability(extract_dir, snap)
+            per_file_log.append("Applied classifications, stability verified")
 
-        import_arch_styles_into_target(
-            target_extract_dir=extract_dir,
-            arch_styles_xml=arch_styles_xml,
-            needed_style_ids=needed_style_ids,
-            log=per_file_log,
-            style_numid_remap=style_numid_remap,
-        )
-        per_file_log.append(f"Imported {len(needed_style_ids)} styles")
-
-        snap = snapshot_stability(extract_dir)
-        apply_report = apply_phase2_classifications(
-            extract_dir=extract_dir,
-            classifications=classifications,
-            arch_style_registry=arch_registry,
-            log=per_file_log,
-        )
-        verify_stability(extract_dir, snap)
-        per_file_log.append("Applied classifications, stability verified")
-
-        output_dir.mkdir(parents=True, exist_ok=True)
-        output_path = output_dir / (docx_path.stem + "_PHASE2_FORMATTED.docx")
-        replacements = {
-            "word/document.xml": (extract_dir / "word" / "document.xml").read_bytes(),
-            "word/styles.xml": (extract_dir / "word" / "styles.xml").read_bytes(),
-        }
-
-        for rel_path, local_path in [
-            ("word/theme/theme1.xml", extract_dir / "word" / "theme" / "theme1.xml"),
-            ("word/settings.xml", extract_dir / "word" / "settings.xml"),
-            ("word/fontTable.xml", extract_dir / "word" / "fontTable.xml"),
-            ("word/numbering.xml", extract_dir / "word" / "numbering.xml"),
-            ("[Content_Types].xml", extract_dir / "[Content_Types].xml"),
-            ("word/_rels/document.xml.rels", extract_dir / "word" / "_rels" / "document.xml.rels"),
-        ]:
-            if local_path.exists():
-                replacements[rel_path] = local_path.read_bytes()
-
-        hf_manifest = env_result.get("header_footer_import", {}) if isinstance(env_result, dict) else {}
-        hf_parts = sorted(hf_manifest.get("part_names", []))
-        hf_rels = sorted(hf_manifest.get("rels_names", []))
-        hf_media = sorted(hf_manifest.get("media_names", []))
-
-        for part_name in hf_parts:
-            local_path = extract_dir / part_name
-            if local_path.exists():
-                replacements[part_name] = local_path.read_bytes()
-
-        for rel_name in hf_rels:
-            local_path = extract_dir / rel_name
-            if local_path.exists():
-                replacements[rel_name] = local_path.read_bytes()
-
-        for media_name in hf_media:
-            local_path = extract_dir / media_name
-            if local_path.exists():
-                replacements[media_name] = local_path.read_bytes()
-
-        with zipfile.ZipFile(docx_path, "r") as z:
-            old_hf_parts = {
-                n
-                for n in z.namelist()
-                if (n.startswith("word/header") or n.startswith("word/footer")) and n.endswith(".xml")
+            output_dir.mkdir(parents=True, exist_ok=True)
+            output_path = output_dir / (docx_path.stem + "_PHASE2_FORMATTED.docx")
+            replacements = {
+                "word/document.xml": (extract_dir / "word" / "document.xml").read_bytes(),
+                "word/styles.xml": (extract_dir / "word" / "styles.xml").read_bytes(),
             }
-            old_hf_rels = {
-                n
-                for n in z.namelist()
-                if (n.startswith("word/_rels/header") or n.startswith("word/_rels/footer")) and n.endswith(".rels")
-            }
-        exclude_parts = (old_hf_parts | old_hf_rels) - set(replacements.keys())
 
-        patch_docx(
-            src_docx=docx_path,
-            out_docx=output_path,
-            replacements=replacements,
-            exclude_parts=exclude_parts,
-        )
+            for rel_path, local_path in [
+                ("word/theme/theme1.xml", extract_dir / "word" / "theme" / "theme1.xml"),
+                ("word/settings.xml", extract_dir / "word" / "settings.xml"),
+                ("word/fontTable.xml", extract_dir / "word" / "fontTable.xml"),
+                ("word/numbering.xml", extract_dir / "word" / "numbering.xml"),
+                ("[Content_Types].xml", extract_dir / "[Content_Types].xml"),
+                ("word/_rels/document.xml.rels", extract_dir / "word" / "_rels" / "document.xml.rels"),
+            ]:
+                if local_path.exists():
+                    replacements[rel_path] = local_path.read_bytes()
 
-        classified, total, unresolved = _coverage_counts(bundle, classifications)
-        class_coverage = (classified / total * 100) if total > 0 else 100.0
-        expected_targetable = apply_report.requested - len(apply_report.skipped_sectpr)
-        app_coverage = (apply_report.modified / expected_targetable * 100) if expected_targetable > 0 else 100.0
-        per_file_log.append(f"Output: {output_path}")
-        per_file_log.append(f"Classification coverage: {classified}/{total} ({class_coverage:.1f}%)")
-        per_file_log.append(
-            f"Application coverage: {apply_report.modified}/{expected_targetable} ({app_coverage:.1f}%)"
-        )
+            hf_manifest = env_result.get("header_footer_import", {}) if isinstance(env_result, dict) else {}
+            hf_parts = sorted(hf_manifest.get("part_names", []))
+            hf_rels = sorted(hf_manifest.get("rels_names", []))
+            hf_media = sorted(hf_manifest.get("media_names", []))
 
-        issues_path = extract_dir / "phase2_issues.log"
-        issues_path.write_text("\n".join(per_file_log) + "\n", encoding="utf-8")
+            for part_name in hf_parts:
+                local_path = extract_dir / part_name
+                if local_path.exists():
+                    replacements[part_name] = local_path.read_bytes()
+
+            for rel_name in hf_rels:
+                local_path = extract_dir / rel_name
+                if local_path.exists():
+                    replacements[rel_name] = local_path.read_bytes()
+
+            for media_name in hf_media:
+                local_path = extract_dir / media_name
+                if local_path.exists():
+                    replacements[media_name] = local_path.read_bytes()
+
+            with zipfile.ZipFile(docx_path, "r") as z:
+                old_hf_parts = {
+                    n
+                    for n in z.namelist()
+                    if (n.startswith("word/header") or n.startswith("word/footer")) and n.endswith(".xml")
+                }
+                old_hf_rels = {
+                    n
+                    for n in z.namelist()
+                    if (n.startswith("word/_rels/header") or n.startswith("word/_rels/footer")) and n.endswith(".rels")
+                }
+            exclude_parts = (old_hf_parts | old_hf_rels) - set(replacements.keys())
+
+            patch_docx(
+                src_docx=docx_path,
+                out_docx=output_path,
+                replacements=replacements,
+                exclude_parts=exclude_parts,
+            )
+
+            classified, total, unresolved = _coverage_counts(bundle, classifications)
+            class_coverage = (classified / total * 100) if total > 0 else 100.0
+            expected_targetable = apply_report.requested - len(apply_report.skipped_sectpr)
+            app_coverage = (apply_report.modified / expected_targetable * 100) if expected_targetable > 0 else 100.0
+            per_file_log.append(f"Output: {output_path}")
+            per_file_log.append(f"Classification coverage: {classified}/{total} ({class_coverage:.1f}%)")
+            per_file_log.append(
+                f"Application coverage: {apply_report.modified}/{expected_targetable} ({app_coverage:.1f}%)"
+            )
 
         return BatchResult(
             filename=filename,
@@ -442,9 +440,6 @@ def _apply_batch_result(
             f"Application coverage: {apply_report.modified}/{expected_targetable} ({app_coverage:.1f}%)"
         )
 
-        issues_path = prepared.extract_dir / "phase2_issues.log"
-        issues_path.write_text("\n".join(per_file_log) + "\n", encoding="utf-8")
-
         return BatchResult(
             filename=filename,
             success=True,
@@ -518,7 +513,6 @@ def run_batch_api(
     poll_interval: int = 30,
     on_file_complete: Optional[Callable[[BatchResult], None]] = None,
     on_batch_poll: Optional[Callable[[str, str, Any], None]] = None,
-    extract_base_dir: Path = Path("output"),
     model: str = "claude-opus-4-6",
 ) -> List[BatchResult]:
     if not docx_paths:
@@ -527,53 +521,56 @@ def run_batch_api(
     workers = max(1, min(max_workers, len(docx_paths)))
     prepared_files: Dict[str, PreparedFile] = {}
 
-    with ThreadPoolExecutor(max_workers=workers) as executor:
-        futures = {
-            executor.submit(_prepare_file_for_batch, docx_path, available_roles, extract_base_dir): docx_path
-            for docx_path in docx_paths
-        }
-        for future in as_completed(futures):
-            prepared = future.result()
-            prepared_files[prepared.file_key] = prepared
+    with tempfile.TemporaryDirectory(prefix="phase2_batch_") as tmp_root:
+        tmp_base = Path(tmp_root)
+        with ThreadPoolExecutor(max_workers=workers) as executor:
+            futures = {
+                executor.submit(_prepare_file_for_batch, docx_path, available_roles, tmp_base): docx_path
+                for docx_path in docx_paths
+            }
+            for future in as_completed(futures):
+                prepared = future.result()
+                prepared_files[prepared.file_key] = prepared
 
-    file_bundles = {key: prepared.bundle for key, prepared in prepared_files.items()}
-    requests = build_batch_requests(file_bundles, available_roles, model)
+        file_bundles = {key: prepared.bundle for key, prepared in prepared_files.items()}
+        requests = build_batch_requests(file_bundles, available_roles, model)
 
-    raw_results = submit_and_poll(
-        requests=requests,
-        api_key=api_key,
-        poll_interval=poll_interval,
-        on_poll=on_batch_poll,
-    )
+        raw_results = submit_and_poll(
+            requests=requests,
+            api_key=api_key,
+            poll_interval=poll_interval,
+            on_poll=on_batch_poll,
+        )
 
-    try:
-        per_file_classifications = reassemble_file_classifications(raw_results, file_bundles, available_roles)
-    except BatchClassificationError:
-        raise
+        try:
+            per_file_classifications = reassemble_file_classifications(raw_results, file_bundles, available_roles)
+        except BatchClassificationError:
+            raise
 
-    results: List[BatchResult] = []
-    with ThreadPoolExecutor(max_workers=workers) as executor:
-        futures = {
-            executor.submit(
-                _apply_batch_result,
-                prepared,
-                per_file_classifications[file_key],
-                arch_registry,
-                env_registry,
-                arch_styles_xml,
-                output_dir,
-            ): file_key
-            for file_key, prepared in prepared_files.items()
-        }
-        for future in as_completed(futures):
-            result = future.result()
-            results.append(result)
-            if on_file_complete:
-                on_file_complete(result)
+        results: List[BatchResult] = []
+        with ThreadPoolExecutor(max_workers=workers) as executor:
+            futures = {
+                executor.submit(
+                    _apply_batch_result,
+                    prepared,
+                    per_file_classifications[file_key],
+                    arch_registry,
+                    env_registry,
+                    arch_styles_xml,
+                    output_dir,
+                ): file_key
+                for file_key, prepared in prepared_files.items()
+            }
+            for future in as_completed(futures):
+                result = future.result()
+                results.append(result)
+                if on_file_complete:
+                    on_file_complete(result)
 
-    return sorted(results, key=lambda item: item.filename)
+        return sorted(results, key=lambda item: item.filename)
+
+
 def _build_file_key(docx_path: Path) -> str:
     safe_stem = re.sub(r"[^A-Za-z0-9_.-]", "_", docx_path.stem)
     digest = hashlib.sha1(str(docx_path.resolve()).encode("utf-8")).hexdigest()[:12]
     return f"{safe_stem}__{digest}"
-
