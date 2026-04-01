@@ -11,20 +11,26 @@ preserving list number formatting (fonts, indents, prefixes).
 
 import re
 import json
-import random
+import hashlib
 from pathlib import Path
 from typing import Dict, List, Tuple, Optional, Any
 from copy import deepcopy
 
 
-def _generate_unique_nsid() -> str:
-    """Generate a unique nsid (8 hex chars) for abstractNum."""
-    return f"{random.randint(0, 0xFFFFFFFF):08X}"
+def _canonicalize_xml(xml_content: str) -> str:
+    return re.sub(r"\s+", " ", xml_content or "").strip()
 
 
-def _generate_unique_durable_id() -> str:
-    """Generate a unique durableId for num."""
-    return str(random.randint(1, 2147483647))
+def _generate_unique_nsid(abstract_num_xml_content: str) -> str:
+    """Generate deterministic nsid (8 hex chars) for abstractNum."""
+    digest = hashlib.sha1(_canonicalize_xml(abstract_num_xml_content).encode("utf-8")).hexdigest()
+    return digest[:8].upper()
+
+
+def _generate_unique_durable_id(num_xml_content: str) -> str:
+    """Generate deterministic durableId for num."""
+    digest = hashlib.sha1(_canonicalize_xml(num_xml_content).encode("utf-8")).hexdigest()
+    return str((int(digest[:8], 16) % 2147483646) + 1)
 
 
 def find_max_ids_in_numbering(numbering_xml: str) -> Tuple[int, int]:
@@ -155,6 +161,7 @@ def build_numbering_import_plan(
 
         # Get XML and remap the abstractNumId
         xml = abstract_nums[old_abstract_id]["xml"]
+        source_xml_for_hash = xml
         xml = re.sub(
             r'w:abstractNumId="' + str(old_abstract_id) + '"',
             f'w:abstractNumId="{new_abstract_id}"',
@@ -163,7 +170,7 @@ def build_numbering_import_plan(
         # Generate new nsid to avoid conflicts
         xml = re.sub(
             r'<w:nsid\s+w:val="[^"]+"/>',
-            f'<w:nsid w:val="{_generate_unique_nsid()}"/>',
+            f'<w:nsid w:val="{_generate_unique_nsid(source_xml_for_hash)}"/>',
             xml
         )
 
@@ -186,6 +193,7 @@ def build_numbering_import_plan(
 
         # Get XML and remap IDs
         xml = num_data["xml"]
+        source_xml_for_hash = xml
         xml = re.sub(
             r'w:numId="' + str(old_num_id) + '"',
             f'w:numId="{new_num_id}"',
@@ -199,7 +207,7 @@ def build_numbering_import_plan(
         # Generate new durableId
         xml = re.sub(
             r'w16cid:durableId="[^"]*"',
-            f'w16cid:durableId="{_generate_unique_durable_id()}"',
+            f'w16cid:durableId="{_generate_unique_durable_id(source_xml_for_hash)}"',
             xml
         )
 

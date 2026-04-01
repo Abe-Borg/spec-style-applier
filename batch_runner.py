@@ -15,6 +15,7 @@ from typing import Any, Callable, Dict, List, Optional
 
 from arch_env_applier import apply_environment_to_target
 from core.classification import apply_phase2_classifications, build_phase2_slim_bundle
+from core.token_utils import extract_target_tokens
 from core.batch_classifier import (
     BatchClassificationError,
     build_batch_requests,
@@ -33,6 +34,7 @@ from core.stability import snapshot_stability, verify_stability
 from core.style_import import import_arch_styles_into_target
 from docx_decomposer import DocxDecomposer
 from docx_patch import patch_docx
+from header_footer_importer import patch_footer_tokens
 
 try:
     from numbering_importer import import_numbering
@@ -58,6 +60,8 @@ class SharedConfig:
     env_registry: Dict[str, Any]
     arch_styles_xml: str
     available_roles: List[str]
+    source_tokens: Dict[str, str]
+    arch_root: Path
 
 
 @dataclass(frozen=True)
@@ -105,13 +109,68 @@ def load_and_validate_shared_config(arch_path: Path) -> SharedConfig:
             f"Preflight validation failed ({len(preflight_errors)} error(s)):\n{error_report}"
         )
 
-    arch_styles_xml = build_arch_styles_xml_from_registry(env_registry)
+    raw_styles_path = arch_root / "arch_styles_raw.xml"
+    if raw_styles_path.exists():
+        arch_styles_xml = raw_styles_path.read_text(encoding="utf-8")
+    else:
+        arch_styles_xml = build_arch_styles_xml_from_registry(env_registry)
+    raw_style_registry = json.loads((arch_root / "arch_style_registry.json").read_text(encoding="utf-8"))
+    source_tokens = raw_style_registry.get("source_tokens", {})
     return SharedConfig(
         arch_registry=arch_registry,
         env_registry=env_registry,
         arch_styles_xml=arch_styles_xml,
         available_roles=available_roles,
+        source_tokens=source_tokens if isinstance(source_tokens, dict) else {},
+        arch_root=arch_root,
     )
+
+
+OPTIONAL_REPLACEMENT_PARTS = [
+    ("word/theme/theme1.xml", lambda d: d / "word" / "theme" / "theme1.xml"),
+    ("word/settings.xml", lambda d: d / "word" / "settings.xml"),
+    ("word/fontTable.xml", lambda d: d / "word" / "fontTable.xml"),
+    ("word/numbering.xml", lambda d: d / "word" / "numbering.xml"),
+    ("[Content_Types].xml", lambda d: d / "[Content_Types].xml"),
+    ("word/_rels/document.xml.rels", lambda d: d / "word" / "_rels" / "document.xml.rels"),
+]
+
+
+def _build_and_patch_output(
+    docx_path: Path,
+    extract_dir: Path,
+    env_result: Dict[str, Any],
+    output_dir: Path,
+) -> Path:
+    output_dir.mkdir(parents=True, exist_ok=True)
+    output_path = output_dir / (docx_path.stem + "_PHASE2_FORMATTED.docx")
+    replacements = {
+        "word/document.xml": (extract_dir / "word" / "document.xml").read_bytes(),
+        "word/styles.xml": (extract_dir / "word" / "styles.xml").read_bytes(),
+    }
+
+    for rel_path, path_builder in OPTIONAL_REPLACEMENT_PARTS:
+        local_path = path_builder(extract_dir)
+        if local_path.exists():
+            replacements[rel_path] = local_path.read_bytes()
+
+    hf_manifest = env_result.get("header_footer_import", {}) if isinstance(env_result, dict) else {}
+    for key in ("part_names", "rels_names", "media_names"):
+        for part_name in sorted(hf_manifest.get(key, [])):
+            local_path = extract_dir / part_name
+            if local_path.exists():
+                replacements[part_name] = local_path.read_bytes()
+
+    with zipfile.ZipFile(docx_path, "r") as z:
+        old_hf_parts = {
+            n for n in z.namelist() if (n.startswith("word/header") or n.startswith("word/footer")) and n.endswith(".xml")
+        }
+        old_hf_rels = {
+            n for n in z.namelist() if (n.startswith("word/_rels/header") or n.startswith("word/_rels/footer")) and n.endswith(".rels")
+        }
+    exclude_parts = (old_hf_parts | old_hf_rels) - set(replacements.keys())
+    patch_docx(src_docx=docx_path, out_docx=output_path, replacements=replacements, exclude_parts=exclude_parts)
+    return output_path
 
 
 def process_single_file(
@@ -122,6 +181,8 @@ def process_single_file(
     available_roles: List[str],
     api_key: str,
     output_dir: Path,
+    source_tokens: Optional[Dict[str, str]] = None,
+    arch_root: Optional[Path] = None,
     model: str = "claude-opus-4-6",
 ) -> BatchResult:
     start = time.monotonic()
@@ -161,8 +222,18 @@ def process_single_file(
             classifications_path.write_text(json.dumps(classifications, indent=2), encoding="utf-8")
             per_file_log.append(f"Classifications saved: {classifications_path}")
 
-            env_result = apply_environment_to_target(target_extract_dir=extract_dir, registry=env_registry, log=per_file_log)
+            target_tokens = extract_target_tokens(extract_dir, classifications)
+
+            env_result = apply_environment_to_target(
+                target_extract_dir=extract_dir,
+                registry=env_registry,
+                log=per_file_log,
+                registry_dir=arch_root,
+            )
             per_file_log.append("Applied environment")
+
+            if source_tokens and target_tokens:
+                patch_footer_tokens(extract_dir, source_tokens, target_tokens, per_file_log)
 
             used_roles = {
                 item.get("csi_role")
@@ -202,63 +273,7 @@ def process_single_file(
             verify_stability(extract_dir, snap)
             per_file_log.append("Applied classifications, stability verified")
 
-            output_dir.mkdir(parents=True, exist_ok=True)
-            output_path = output_dir / (docx_path.stem + "_PHASE2_FORMATTED.docx")
-            replacements = {
-                "word/document.xml": (extract_dir / "word" / "document.xml").read_bytes(),
-                "word/styles.xml": (extract_dir / "word" / "styles.xml").read_bytes(),
-            }
-
-            for rel_path, local_path in [
-                ("word/theme/theme1.xml", extract_dir / "word" / "theme" / "theme1.xml"),
-                ("word/settings.xml", extract_dir / "word" / "settings.xml"),
-                ("word/fontTable.xml", extract_dir / "word" / "fontTable.xml"),
-                ("word/numbering.xml", extract_dir / "word" / "numbering.xml"),
-                ("[Content_Types].xml", extract_dir / "[Content_Types].xml"),
-                ("word/_rels/document.xml.rels", extract_dir / "word" / "_rels" / "document.xml.rels"),
-            ]:
-                if local_path.exists():
-                    replacements[rel_path] = local_path.read_bytes()
-
-            hf_manifest = env_result.get("header_footer_import", {}) if isinstance(env_result, dict) else {}
-            hf_parts = sorted(hf_manifest.get("part_names", []))
-            hf_rels = sorted(hf_manifest.get("rels_names", []))
-            hf_media = sorted(hf_manifest.get("media_names", []))
-
-            for part_name in hf_parts:
-                local_path = extract_dir / part_name
-                if local_path.exists():
-                    replacements[part_name] = local_path.read_bytes()
-
-            for rel_name in hf_rels:
-                local_path = extract_dir / rel_name
-                if local_path.exists():
-                    replacements[rel_name] = local_path.read_bytes()
-
-            for media_name in hf_media:
-                local_path = extract_dir / media_name
-                if local_path.exists():
-                    replacements[media_name] = local_path.read_bytes()
-
-            with zipfile.ZipFile(docx_path, "r") as z:
-                old_hf_parts = {
-                    n
-                    for n in z.namelist()
-                    if (n.startswith("word/header") or n.startswith("word/footer")) and n.endswith(".xml")
-                }
-                old_hf_rels = {
-                    n
-                    for n in z.namelist()
-                    if (n.startswith("word/_rels/header") or n.startswith("word/_rels/footer")) and n.endswith(".rels")
-                }
-            exclude_parts = (old_hf_parts | old_hf_rels) - set(replacements.keys())
-
-            patch_docx(
-                src_docx=docx_path,
-                out_docx=output_path,
-                replacements=replacements,
-                exclude_parts=exclude_parts,
-            )
+            output_path = _build_and_patch_output(docx_path, extract_dir, env_result, output_dir)
 
             classified, total, unresolved = _coverage_counts(bundle, classifications)
             class_coverage = (classified / total * 100) if total > 0 else 100.0
@@ -320,6 +335,8 @@ def _apply_batch_result(
     env_registry: Dict[str, Any],
     arch_styles_xml: str,
     output_dir: Path,
+    source_tokens: Optional[Dict[str, str]] = None,
+    arch_root: Optional[Path] = None,
 ) -> BatchResult:
     start = time.monotonic()
     per_file_log = list(prepared.prep_log)
@@ -331,8 +348,17 @@ def _apply_batch_result(
         classifications_path.write_text(json.dumps(classifications, indent=2), encoding="utf-8")
         per_file_log.append(f"Classifications saved: {classifications_path}")
 
-        env_result = apply_environment_to_target(target_extract_dir=prepared.extract_dir, registry=env_registry, log=per_file_log)
+        target_tokens = extract_target_tokens(prepared.extract_dir, classifications)
+
+        env_result = apply_environment_to_target(
+            target_extract_dir=prepared.extract_dir,
+            registry=env_registry,
+            log=per_file_log,
+            registry_dir=arch_root,
+        )
         per_file_log.append("Applied environment")
+        if source_tokens and target_tokens:
+            patch_footer_tokens(prepared.extract_dir, source_tokens, target_tokens, per_file_log)
 
         used_roles = {
             item.get("csi_role")
@@ -372,63 +398,7 @@ def _apply_batch_result(
         verify_stability(prepared.extract_dir, snap)
         per_file_log.append("Applied classifications, stability verified")
 
-        output_dir.mkdir(parents=True, exist_ok=True)
-        output_path = output_dir / (prepared.docx_path.stem + "_PHASE2_FORMATTED.docx")
-        replacements = {
-            "word/document.xml": (prepared.extract_dir / "word" / "document.xml").read_bytes(),
-            "word/styles.xml": (prepared.extract_dir / "word" / "styles.xml").read_bytes(),
-        }
-
-        for rel_path, local_path in [
-            ("word/theme/theme1.xml", prepared.extract_dir / "word" / "theme" / "theme1.xml"),
-            ("word/settings.xml", prepared.extract_dir / "word" / "settings.xml"),
-            ("word/fontTable.xml", prepared.extract_dir / "word" / "fontTable.xml"),
-            ("word/numbering.xml", prepared.extract_dir / "word" / "numbering.xml"),
-            ("[Content_Types].xml", prepared.extract_dir / "[Content_Types].xml"),
-            ("word/_rels/document.xml.rels", prepared.extract_dir / "word" / "_rels" / "document.xml.rels"),
-        ]:
-            if local_path.exists():
-                replacements[rel_path] = local_path.read_bytes()
-
-        hf_manifest = env_result.get("header_footer_import", {}) if isinstance(env_result, dict) else {}
-        hf_parts = sorted(hf_manifest.get("part_names", []))
-        hf_rels = sorted(hf_manifest.get("rels_names", []))
-        hf_media = sorted(hf_manifest.get("media_names", []))
-
-        for part_name in hf_parts:
-            local_path = prepared.extract_dir / part_name
-            if local_path.exists():
-                replacements[part_name] = local_path.read_bytes()
-
-        for rel_name in hf_rels:
-            local_path = prepared.extract_dir / rel_name
-            if local_path.exists():
-                replacements[rel_name] = local_path.read_bytes()
-
-        for media_name in hf_media:
-            local_path = prepared.extract_dir / media_name
-            if local_path.exists():
-                replacements[media_name] = local_path.read_bytes()
-
-        with zipfile.ZipFile(prepared.docx_path, "r") as z:
-            old_hf_parts = {
-                n
-                for n in z.namelist()
-                if (n.startswith("word/header") or n.startswith("word/footer")) and n.endswith(".xml")
-            }
-            old_hf_rels = {
-                n
-                for n in z.namelist()
-                if (n.startswith("word/_rels/header") or n.startswith("word/_rels/footer")) and n.endswith(".rels")
-            }
-        exclude_parts = (old_hf_parts | old_hf_rels) - set(replacements.keys())
-
-        patch_docx(
-            src_docx=prepared.docx_path,
-            out_docx=output_path,
-            replacements=replacements,
-            exclude_parts=exclude_parts,
-        )
+        output_path = _build_and_patch_output(prepared.docx_path, prepared.extract_dir, env_result, output_dir)
 
         classified, total, unresolved = _coverage_counts(prepared.bundle, classifications)
         class_coverage = (classified / total * 100) if total > 0 else 100.0
@@ -468,6 +438,8 @@ def run_batch_concurrent(
     available_roles: List[str],
     api_key: str,
     output_dir: Path,
+    source_tokens: Optional[Dict[str, str]] = None,
+    arch_root: Optional[Path] = None,
     max_workers: int = 3,
     on_file_complete: Optional[Callable[[BatchResult], None]] = None,
 ) -> List[BatchResult]:
@@ -478,19 +450,36 @@ def run_batch_concurrent(
     results: List[BatchResult] = []
 
     with ThreadPoolExecutor(max_workers=workers) as executor:
-        futures = {
-            executor.submit(
-                process_single_file,
-                docx_path,
-                arch_registry,
-                env_registry,
-                arch_styles_xml,
-                available_roles,
-                api_key,
-                output_dir,
-            ): docx_path
-            for docx_path in docx_paths
-        }
+        if source_tokens is None and arch_root is None:
+            futures = {
+                executor.submit(
+                    process_single_file,
+                    docx_path,
+                    arch_registry,
+                    env_registry,
+                    arch_styles_xml,
+                    available_roles,
+                    api_key,
+                    output_dir,
+                ): docx_path
+                for docx_path in docx_paths
+            }
+        else:
+            futures = {
+                executor.submit(
+                    process_single_file,
+                    docx_path,
+                    arch_registry,
+                    env_registry,
+                    arch_styles_xml,
+                    available_roles,
+                    api_key,
+                    output_dir,
+                    source_tokens,
+                    arch_root,
+                ): docx_path
+                for docx_path in docx_paths
+            }
 
         for future in as_completed(futures):
             result = future.result()
@@ -509,6 +498,8 @@ def run_batch_api(
     available_roles: List[str],
     api_key: str,
     output_dir: Path,
+    source_tokens: Optional[Dict[str, str]] = None,
+    arch_root: Optional[Path] = None,
     max_workers: int = 3,
     poll_interval: int = 30,
     on_file_complete: Optional[Callable[[BatchResult], None]] = None,
@@ -549,18 +540,34 @@ def run_batch_api(
 
         results: List[BatchResult] = []
         with ThreadPoolExecutor(max_workers=workers) as executor:
-            futures = {
-                executor.submit(
-                    _apply_batch_result,
-                    prepared,
-                    per_file_classifications[file_key],
-                    arch_registry,
-                    env_registry,
-                    arch_styles_xml,
-                    output_dir,
-                ): file_key
-                for file_key, prepared in prepared_files.items()
-            }
+            if source_tokens is None and arch_root is None:
+                futures = {
+                    executor.submit(
+                        _apply_batch_result,
+                        prepared,
+                        per_file_classifications[file_key],
+                        arch_registry,
+                        env_registry,
+                        arch_styles_xml,
+                        output_dir,
+                    ): file_key
+                    for file_key, prepared in prepared_files.items()
+                }
+            else:
+                futures = {
+                    executor.submit(
+                        _apply_batch_result,
+                        prepared,
+                        per_file_classifications[file_key],
+                        arch_registry,
+                        env_registry,
+                        arch_styles_xml,
+                        output_dir,
+                        source_tokens,
+                        arch_root,
+                    ): file_key
+                    for file_key, prepared in prepared_files.items()
+                }
             for future in as_completed(futures):
                 result = future.result()
                 results.append(result)
