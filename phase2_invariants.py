@@ -19,7 +19,13 @@ def _extract_all_sectpr_blocks(document_xml: str) -> List[str]:
 def _normalize_sectpr_for_comparison(sectpr: str) -> str:
     """Strip managed layout tags so only non-layout section semantics are compared."""
     out = sectpr
-    for tag in ("pgSz", "pgMar", "cols", "docGrid", "headerReference", "footerReference", "titlePg"):
+    for tag in (
+        "pgSz", "pgMar", "cols", "docGrid",
+        "headerReference", "footerReference", "titlePg",
+        "type", "pgNumType", "vAlign", "textDirection",
+        "bidi", "rtlGutter", "lnNumType", "pgBorders",
+        "paperSrc", "formProt", "noEndnote",
+    ):
         out = re.sub(rf'<w:{tag}\b[^>]*/>', '', out)
         out = re.sub(rf'<w:{tag}\b[^>]*>[\s\S]*?</w:{tag}>', '', out, flags=re.S)
     # reduce whitespace noise introduced by stripping

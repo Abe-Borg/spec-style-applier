@@ -614,6 +614,8 @@ class Phase2GUI(ctk.CTk):
             available_roles=shared.available_roles,
             api_key=self.api_key_var.get(),
             output_dir=Path(self.output_dir_var.get()),
+            source_tokens=shared.source_tokens,
+            arch_root=shared.arch_root,
         )
 
         for line in result.log:
@@ -681,6 +683,8 @@ class Phase2GUI(ctk.CTk):
                 available_roles=shared.available_roles,
                 api_key=self.api_key_var.get(),
                 output_dir=Path(self.output_dir_var.get()),
+                source_tokens=shared.source_tokens,
+                arch_root=shared.arch_root,
                 max_workers=int(self._workers_var.get()),
                 on_file_complete=handle_result,
                 on_batch_poll=on_batch_poll,
@@ -700,6 +704,8 @@ class Phase2GUI(ctk.CTk):
                 available_roles=shared.available_roles,
                 api_key=self.api_key_var.get(),
                 output_dir=Path(self.output_dir_var.get()),
+                source_tokens=shared.source_tokens,
+                arch_root=shared.arch_root,
                 max_workers=int(self._workers_var.get()),
                 on_file_complete=handle_result,
             )
