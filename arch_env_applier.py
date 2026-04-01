@@ -369,7 +369,7 @@ def apply_settings(
 
         target_settings_xml = settings_path.read_text(encoding="utf-8")
         preserved: Dict[str, str] = {}
-        for tag in ("docId", "rsids"):
+        for tag in ("docId",):
             block = extract_tag_block(target_settings_xml, tag)
             if block:
                 preserved[tag] = block
@@ -383,7 +383,7 @@ def apply_settings(
                 merged = merged.replace("</w:settings>", f"{block}\n</w:settings>")
 
         settings_path.write_text(merged, encoding="utf-8")
-        log.append("Applied exact settings from architect (preserved: docId, rsids)")
+        log.append("Applied exact settings from architect (preserved: docId)")
         return
 
     # For now, we focus on compat flags rather than replacing entire settings.xml

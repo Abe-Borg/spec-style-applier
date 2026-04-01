@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import base64
 import hashlib
+import html
 import re
 import xml.etree.ElementTree as ET
 from dataclasses import dataclass, field
@@ -385,7 +386,7 @@ def patch_footer_tokens(
     target_tokens: Dict[str, str],
     log: List[str],
 ) -> None:
-    from core.token_utils import smart_title_case
+    from core.token_utils import apply_case_pattern, detect_case_pattern, smart_title_case
 
     word_dir = target_extract_dir / "word"
     if not word_dir.exists():
@@ -394,34 +395,100 @@ def patch_footer_tokens(
     arch_title = source_tokens.get("SectionTitle", "")
     target_title_display = target_tokens.get("SectionTitle_display", "") or target_tokens.get("SectionTitle", "")
     target_title_raw = target_tokens.get("SectionTitle", "")
-    arch_id_numeric = _extract_numeric_from_section_id(source_tokens.get("SectionID", ""))
-    target_id_numeric = _extract_numeric_from_section_id(target_tokens.get("SectionID", ""))
+    arch_id_numeric = source_tokens.get("SectionID_numeric") or _extract_numeric_from_section_id(source_tokens.get("SectionID", ""))
+    target_id_numeric = target_tokens.get("SectionID_numeric") or _extract_numeric_from_section_id(target_tokens.get("SectionID", ""))
+
+    wt_pattern = re.compile(r"(<w:t\b[^>]*>)([\s\S]*?)(</w:t>)")
+
+    def _replace_first_visible_text(paragraph_xml: str, old_text: str, new_text: str) -> tuple[str, bool]:
+        nodes = list(wt_pattern.finditer(paragraph_xml))
+        if not nodes:
+            return paragraph_xml, False
+
+        visible = "".join(html.unescape(n.group(2)) for n in nodes)
+        start = visible.find(old_text)
+        if start < 0:
+            return paragraph_xml, False
+        end = start + len(old_text)
+
+        out: List[str] = []
+        cursor = 0
+        vis_offset = 0
+        replacement_placed = False
+        changed = False
+        for node in nodes:
+            out.append(paragraph_xml[cursor:node.start()])
+            open_tag, escaped_text, close_tag = node.groups()
+            node_text = html.unescape(escaped_text)
+            node_start = vis_offset
+            node_end = vis_offset + len(node_text)
+            new_node_text = node_text
+
+            if node_end > start and node_start < end:
+                overlap_start = max(start, node_start) - node_start
+                overlap_end = min(end, node_end) - node_start
+                before = node_text[:overlap_start]
+                after = node_text[overlap_end:]
+                if not replacement_placed:
+                    new_node_text = before + new_text + after
+                    replacement_placed = True
+                else:
+                    new_node_text = before + after
+                changed = True
+
+            out.append(f"{open_tag}{html.escape(new_node_text)}{close_tag}")
+            cursor = node.end()
+            vis_offset = node_end
+
+        out.append(paragraph_xml[cursor:])
+        return "".join(out), changed
 
     for footer_path in sorted(word_dir.glob("footer*.xml")):
         footer_xml = footer_path.read_text(encoding="utf-8")
         modified = False
+        paragraph_matches = list(re.finditer(r"(<w:p\b[\s\S]*?</w:p>)", footer_xml))
+        updated_chunks: List[str] = []
+        cursor = 0
+        for pm in paragraph_matches:
+            updated_chunks.append(footer_xml[cursor:pm.start()])
+            paragraph_xml = pm.group(1)
 
-        if arch_title and target_title_display:
-            arch_title_titlecase = smart_title_case(arch_title)
-            if arch_title_titlecase in footer_xml:
-                footer_xml = footer_xml.replace(arch_title_titlecase, target_title_display)
-                modified = True
-            if arch_title.upper() in footer_xml:
-                footer_xml = footer_xml.replace(arch_title.upper(), target_title_raw or target_title_display)
-                modified = True
-            if arch_title in footer_xml:
-                footer_xml = footer_xml.replace(arch_title, target_title_display)
-                modified = True
+            wt_nodes = list(wt_pattern.finditer(paragraph_xml))
+            visible_norm = "".join(html.unescape(n.group(2)) for n in wt_nodes)
+            new_paragraph = paragraph_xml
 
-        if arch_id_numeric and target_id_numeric:
-            if arch_id_numeric in footer_xml:
-                footer_xml = footer_xml.replace(arch_id_numeric, target_id_numeric)
-                modified = True
-            arch_compact = arch_id_numeric.replace(" ", "")
-            target_compact = target_id_numeric.replace(" ", "")
-            if arch_compact in footer_xml:
-                footer_xml = footer_xml.replace(arch_compact, target_compact)
-                modified = True
+            if visible_norm and arch_title and target_title_display:
+                match_forms = [smart_title_case(arch_title), arch_title.upper(), arch_title]
+                seen_forms = set()
+                for form in match_forms:
+                    if not form or form in seen_forms:
+                        continue
+                    seen_forms.add(form)
+                    if form in visible_norm:
+                        pattern = detect_case_pattern(form)
+                        replacement = apply_case_pattern(target_title_raw or target_title_display, pattern)
+                        new_paragraph, changed = _replace_first_visible_text(new_paragraph, form, replacement)
+                        modified = modified or changed
+                        break
+
+            if arch_id_numeric and target_id_numeric:
+                for src_variant, dst_variant in (
+                    (arch_id_numeric, target_id_numeric),
+                    (arch_id_numeric.replace(" ", ""), target_id_numeric.replace(" ", "")),
+                ):
+                    if not src_variant:
+                        continue
+                    if src_variant in visible_norm:
+                        new_paragraph, changed = _replace_first_visible_text(new_paragraph, src_variant, dst_variant)
+                        modified = modified or changed
+                        break
+
+            updated_chunks.append(new_paragraph)
+            cursor = pm.end()
+
+        updated_chunks.append(footer_xml[cursor:])
+        if paragraph_matches:
+            footer_xml = "".join(updated_chunks)
 
         if modified:
             footer_path.write_text(footer_xml, encoding="utf-8")

@@ -227,6 +227,38 @@ class TestApplySettingsIdempotent:
         assert rels.count('Target="settings.xml"') == 1
 
 
+class TestApplySettingsRawMerge:
+    def test_raw_settings_preserves_only_docid(self, tmp_path):
+        extract = _setup_extract_dir(tmp_path)
+        settings_path = extract / "word" / "settings.xml"
+        settings_path.write_text(
+            '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+            '<w:settings xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">'
+            '<w:docId w:val="AAAA"/>'
+            '<w:rsids><w:rsidRoot w:val="BBBB"/></w:rsids>'
+            '</w:settings>',
+            encoding="utf-8",
+        )
+        registry_dir = tmp_path / "registry"
+        registry_dir.mkdir()
+        (registry_dir / "arch_settings_raw.xml").write_text(
+            '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+            '<w:settings xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">'
+            '<w:docId w:val="ARCH"/>'
+            '<w:rsids><w:rsidRoot w:val="ARCHRSID"/></w:rsids>'
+            '</w:settings>',
+            encoding="utf-8",
+        )
+
+        log = []
+        apply_settings(extract, {"settings": {}}, log, registry_dir=registry_dir)
+        out = settings_path.read_text(encoding="utf-8")
+        assert '<w:docId w:val="AAAA"/>' in out
+        assert "ARCHRSID" in out
+        assert "BBBB" not in out
+        assert any("preserved: docId" in msg for msg in log)
+
+
 # ---------------------------------------------------------------------------
 # Part B — apply_font_table() tests
 # ---------------------------------------------------------------------------

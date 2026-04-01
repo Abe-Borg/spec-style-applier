@@ -2,7 +2,7 @@ import base64
 from pathlib import Path
 
 from core.xml_helpers import iter_paragraph_xml_blocks
-from header_footer_importer import import_headers_footers
+from header_footer_importer import import_headers_footers, patch_footer_tokens
 
 
 def _seed_extract(tmp_path: Path) -> Path:
@@ -139,3 +139,32 @@ def test_hf_media_import_does_not_overwrite_existing_body_media(tmp_path):
     assert (media_dir / "image1.png").read_bytes() == b"body"
     assert result.media_names
     assert all(name.startswith("word/media/hf_") for name in result.media_names)
+
+
+def test_patch_footer_tokens_handles_split_wt_nodes_and_case_mirroring(tmp_path):
+    word_dir = tmp_path / "word"
+    word_dir.mkdir(parents=True, exist_ok=True)
+    footer_path = word_dir / "footer1.xml"
+    footer_path.write_text(
+        '<w:ftr xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">'
+        '<w:tbl><w:tr><w:tc><w:p>'
+        '<w:r><w:t>Metal </w:t></w:r><w:r><w:t>Ducts</w:t></w:r>'
+        '<w:r><w:t xml:space="preserve"> </w:t></w:r>'
+        '<w:r><w:t>23 31 00</w:t></w:r>'
+        '</w:p></w:tc></w:tr></w:tbl>'
+        '</w:ftr>',
+        encoding="utf-8",
+    )
+    log = []
+    patch_footer_tokens(
+        target_extract_dir=tmp_path,
+        source_tokens={"SectionTitle": "METAL DUCTS", "SectionID": "SECTION 23 31 00"},
+        target_tokens={"SectionTitle": "Direct-Digital Control System for HVAC", "SectionID": "SECTION 23 09 00"},
+        log=log,
+    )
+
+    out = footer_path.read_text(encoding="utf-8")
+    assert "Direct-Digital Control System for HVAC" in out
+    assert "23 09 00" in out
+    assert "Metal " not in out
+    assert any("Patched tokens in footer1.xml" in line for line in log)
