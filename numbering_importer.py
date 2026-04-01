@@ -33,6 +33,30 @@ def _generate_unique_durable_id(num_xml_content: str) -> str:
     return str((int(digest[:8], 16) % 2147483646) + 1)
 
 
+def _generate_collision_safe_nsid(abstract_num_xml: str, target_numbering_xml: str) -> str:
+    existing = set(re.findall(r'<w:nsid\s+w:val="([^"]+)"', target_numbering_xml or ""))
+    candidate = _generate_unique_nsid(abstract_num_xml)
+    if candidate not in existing:
+        return candidate
+    for i in range(1, 1000):
+        candidate = _generate_unique_nsid(abstract_num_xml + f"__collision_{i}")
+        if candidate not in existing:
+            return candidate
+    raise ValueError("Could not generate unique nsid after 1000 attempts")
+
+
+def _generate_collision_safe_durable_id(num_xml: str, target_numbering_xml: str) -> str:
+    existing = set(re.findall(r'w16cid:durableId="([^"]+)"', target_numbering_xml or ""))
+    candidate = _generate_unique_durable_id(num_xml)
+    if candidate not in existing:
+        return candidate
+    for i in range(1, 1000):
+        candidate = _generate_unique_durable_id(num_xml + f"__collision_{i}")
+        if candidate not in existing:
+            return candidate
+    raise ValueError("Could not generate unique durableId after 1000 attempts")
+
+
 def find_max_ids_in_numbering(numbering_xml: str) -> Tuple[int, int]:
     """
     Find the maximum abstractNumId and numId in existing numbering.xml.
@@ -170,7 +194,7 @@ def build_numbering_import_plan(
         # Generate new nsid to avoid conflicts
         xml = re.sub(
             r'<w:nsid\s+w:val="[^"]+"/>',
-            f'<w:nsid w:val="{_generate_unique_nsid(source_xml_for_hash)}"/>',
+            f'<w:nsid w:val="{_generate_collision_safe_nsid(source_xml_for_hash, target_numbering_xml)}"/>',
             xml
         )
 
@@ -207,7 +231,7 @@ def build_numbering_import_plan(
         # Generate new durableId
         xml = re.sub(
             r'w16cid:durableId="[^"]*"',
-            f'w16cid:durableId="{_generate_unique_durable_id(source_xml_for_hash)}"',
+            f'w16cid:durableId="{_generate_collision_safe_durable_id(source_xml_for_hash, target_numbering_xml)}"',
             xml
         )
 

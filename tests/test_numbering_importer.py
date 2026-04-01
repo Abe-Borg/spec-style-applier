@@ -206,7 +206,11 @@ class TestBuildPlanFailFast:
         styles_xml = _make_arch_styles_xml([("PlainStyle", None)])
         registry = _make_registry(
             abstract_nums=[_make_abstract_num(5)],
-            nums=[_make_num(2, 5)],
+            nums=[{
+                "numId": 2,
+                "abstractNumId": 5,
+                "xml": '<w:num w:numId="2" w16cid:durableId="1" xmlns:w16cid="http://schemas.microsoft.com/office/word/2016/wordml/cid"><w:abstractNumId w:val="5"/></w:num>',
+            }],
         )
 
         plan = build_numbering_import_plan(
@@ -218,6 +222,38 @@ class TestBuildPlanFailFast:
         assert plan["abstract_nums_to_import"] == []
         assert plan["nums_to_import"] == []
         assert plan["style_numid_remap"] == {}
+
+    def test_collision_safe_ids_when_hash_matches_existing(self, monkeypatch):
+        styles_xml = _make_arch_styles_xml([("CSILevel1", 2)])
+        registry = _make_registry(
+            abstract_nums=[_make_abstract_num(5)],
+            nums=[{
+                "numId": 2,
+                "abstractNumId": 5,
+                "xml": '<w:num w:numId="2" w16cid:durableId="1" xmlns:w16cid="http://schemas.microsoft.com/office/word/2016/wordml/cid"><w:abstractNumId w:val="5"/></w:num>',
+            }],
+        )
+        target_numbering = (
+            '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+            '<w:numbering xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">'
+            '<w:abstractNum w:abstractNumId="0"><w:nsid w:val="COLLIDE1"/></w:abstractNum>'
+            '<w:num w:numId="1" w16cid:durableId="999" xmlns:w16cid="http://schemas.microsoft.com/office/word/2016/wordml/cid"/>'
+            '</w:numbering>'
+        )
+
+        seq_nsid = iter(["COLLIDE1", "UNIQUE99"])
+        seq_durable = iter(["999", "12345"])
+        monkeypatch.setattr("numbering_importer._generate_unique_nsid", lambda _xml: next(seq_nsid))
+        monkeypatch.setattr("numbering_importer._generate_unique_durable_id", lambda _xml: next(seq_durable))
+
+        plan = build_numbering_import_plan(
+            registry,
+            styles_xml,
+            target_numbering,
+            ["CSILevel1"],
+        )
+        assert 'w:nsid w:val="UNIQUE99"' in plan["abstract_nums_to_import"][0]["xml"]
+        assert 'w16cid:durableId="12345"' in plan["nums_to_import"][0]["xml"]
 
 
 # ---------------------------------------------------------------------------

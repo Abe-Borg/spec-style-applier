@@ -28,6 +28,31 @@ def smart_title_case(text: str) -> str:
     return " ".join(_title_word(word) for word in text.split())
 
 
+def detect_case_pattern(text: str) -> str:
+    """Detect whether text is UPPERCASE, Title Case, or mixed."""
+    stripped = (text or "").strip()
+    if not stripped:
+        return "unknown"
+    if stripped == stripped.upper():
+        return "upper"
+    words = stripped.split()
+    if not words:
+        return "unknown"
+    capitalized = sum(1 for w in words if w[:1].isupper())
+    if capitalized >= len(words) * 0.7:
+        return "title"
+    return "mixed"
+
+
+def apply_case_pattern(text: str, pattern: str) -> str:
+    """Apply a detected case pattern to text."""
+    if pattern == "upper":
+        return text.upper()
+    if pattern == "title":
+        return smart_title_case(text)
+    return text
+
+
 def extract_target_tokens(extract_dir: Path, classifications: Dict[str, Any]) -> Dict[str, str]:
     doc_path = extract_dir / "word" / "document.xml"
     if not doc_path.exists():
