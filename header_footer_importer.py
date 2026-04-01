@@ -218,7 +218,7 @@ def _build_arch_rid_to_part(entries: List[Tuple[str, Dict[str, Any]]]) -> Dict[s
         part_name = entry.get("part_name")
         if not isinstance(part_name, str):
             continue
-        for key in ("rid", "rId", "relationship_id"):
+        for key in ("rel_id", "rid", "rId", "relationship_id"):
             rid = entry.get(key)
             if isinstance(rid, str):
                 out[rid] = part_name
@@ -262,14 +262,14 @@ def _rewire_document_sectpr(target_extract_dir: Path, registry: Dict[str, Any], 
         children = extract_sectpr_children(inner)
 
         insert_nodes: List[str] = []
-        has_first = False
+        source_sectpr_xml = source.get("sectPr", "") if isinstance(source, dict) else ""
+        source_has_titlepg = "<w:titlePg" in source_sectpr_xml
         for ref_type, old_rid in headers.items():
             part_name = rid_to_part.get(old_rid)
             new_rid = part_to_rid.get(part_name) if part_name else None
             if not new_rid:
                 continue
             insert_nodes.append(_raw_ref("header", ref_type, new_rid))
-            has_first = has_first or ref_type == "first"
 
         for ref_type, old_rid in footers.items():
             part_name = rid_to_part.get(old_rid)
@@ -277,9 +277,8 @@ def _rewire_document_sectpr(target_extract_dir: Path, registry: Dict[str, Any], 
             if not new_rid:
                 continue
             insert_nodes.append(_raw_ref("footer", ref_type, new_rid))
-            has_first = has_first or ref_type == "first"
 
-        if has_first:
+        if source_has_titlepg:
             insert_nodes.append("<w:titlePg/>")
 
         for node in insert_nodes:
@@ -370,3 +369,62 @@ def import_headers_footers(target_extract_dir: Path, registry: Dict[str, Any], l
     _rewire_document_sectpr(target_extract_dir, registry, entries, part_to_rid, log)
     _ensure_content_types(target_extract_dir, part_to_type, entries, log)
     return result
+
+
+def _extract_numeric_from_section_id(value: str) -> str:
+    m = re.search(r"SECTION\s+([\d\s]+)", value or "", flags=re.IGNORECASE)
+    if m:
+        return re.sub(r"\s+", " ", m.group(1)).strip()
+    digits = re.findall(r"\d+", value or "")
+    return " ".join(digits).strip()
+
+
+def patch_footer_tokens(
+    target_extract_dir: Path,
+    source_tokens: Dict[str, str],
+    target_tokens: Dict[str, str],
+    log: List[str],
+) -> None:
+    from core.token_utils import smart_title_case
+
+    word_dir = target_extract_dir / "word"
+    if not word_dir.exists():
+        return
+
+    arch_title = source_tokens.get("SectionTitle", "")
+    target_title_display = target_tokens.get("SectionTitle_display", "") or target_tokens.get("SectionTitle", "")
+    target_title_raw = target_tokens.get("SectionTitle", "")
+    arch_id_numeric = _extract_numeric_from_section_id(source_tokens.get("SectionID", ""))
+    target_id_numeric = _extract_numeric_from_section_id(target_tokens.get("SectionID", ""))
+
+    for footer_path in sorted(word_dir.glob("footer*.xml")):
+        footer_xml = footer_path.read_text(encoding="utf-8")
+        modified = False
+
+        if arch_title and target_title_display:
+            arch_title_titlecase = smart_title_case(arch_title)
+            if arch_title_titlecase in footer_xml:
+                footer_xml = footer_xml.replace(arch_title_titlecase, target_title_display)
+                modified = True
+            if arch_title.upper() in footer_xml:
+                footer_xml = footer_xml.replace(arch_title.upper(), target_title_raw or target_title_display)
+                modified = True
+            if arch_title in footer_xml:
+                footer_xml = footer_xml.replace(arch_title, target_title_display)
+                modified = True
+
+        if arch_id_numeric and target_id_numeric:
+            if arch_id_numeric in footer_xml:
+                footer_xml = footer_xml.replace(arch_id_numeric, target_id_numeric)
+                modified = True
+            arch_compact = arch_id_numeric.replace(" ", "")
+            target_compact = target_id_numeric.replace(" ", "")
+            if arch_compact in footer_xml:
+                footer_xml = footer_xml.replace(arch_compact, target_compact)
+                modified = True
+
+        if modified:
+            footer_path.write_text(footer_xml, encoding="utf-8")
+            log.append(f"Patched tokens in {footer_path.name}")
+        else:
+            log.append(f"No token matches found in {footer_path.name}")

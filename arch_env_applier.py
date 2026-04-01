@@ -47,10 +47,16 @@ from core.sectpr_tools import (
     extract_all_sectpr_blocks,
     extract_sectpr_children,
     extract_tag_block,
+    replace_nth_sectpr_block,
     strip_tag_block,
 )
 
-MANAGED_LAYOUT_TAGS = ("pgSz", "pgMar", "cols", "docGrid")
+MANAGED_LAYOUT_TAGS = (
+    "pgSz", "pgMar", "cols", "docGrid",
+    "type", "pgNumType", "vAlign", "textDirection",
+    "bidi", "rtlGutter", "lnNumType", "pgBorders",
+    "paperSrc", "formProt", "noEndnote",
+)
 _CANONICAL_SECTPR_ORDER = CANONICAL_SECTPR_ORDER
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -335,7 +341,8 @@ def _ensure_font_table_in_rels(extract_dir: Path, log: List[str]) -> None:
 def apply_settings(
     target_extract_dir: Path,
     registry: Dict[str, Any],
-    log: List[str]
+    log: List[str],
+    registry_dir: Optional[Path] = None,
 ) -> None:
     """
     Apply settings.xml from registry, focusing on compat flags.
@@ -348,6 +355,36 @@ def apply_settings(
     Malformed compat_xml is rejected before any mutation.
     """
     settings_data = registry.get("settings", {})
+    raw_settings_path = (registry_dir / "arch_settings_raw.xml") if registry_dir else None
+
+    settings_path = target_extract_dir / "word" / "settings.xml"
+    if raw_settings_path and raw_settings_path.exists():
+        arch_settings_xml = raw_settings_path.read_text(encoding="utf-8")
+        if not settings_path.exists():
+            settings_path.parent.mkdir(parents=True, exist_ok=True)
+            settings_path.write_text(_MINIMAL_SETTINGS_XML, encoding="utf-8")
+            _ensure_settings_in_content_types(target_extract_dir, log)
+            _ensure_settings_in_rels(target_extract_dir, log)
+            log.append("Created minimal settings.xml (none existed in target)")
+
+        target_settings_xml = settings_path.read_text(encoding="utf-8")
+        preserved: Dict[str, str] = {}
+        for tag in ("docId", "rsids"):
+            block = extract_tag_block(target_settings_xml, tag)
+            if block:
+                preserved[tag] = block
+
+        merged = arch_settings_xml
+        for tag, block in preserved.items():
+            existing = extract_tag_block(merged, tag)
+            if existing:
+                merged = merged.replace(existing, block, 1)
+            elif "</w:settings>" in merged:
+                merged = merged.replace("</w:settings>", f"{block}\n</w:settings>")
+
+        settings_path.write_text(merged, encoding="utf-8")
+        log.append("Applied exact settings from architect (preserved: docId, rsids)")
+        return
 
     # For now, we focus on compat flags rather than replacing entire settings.xml
     # (full replacement could break other document-specific settings)
@@ -363,7 +400,6 @@ def apply_settings(
         log.append(f"WARNING: Skipping compat application — {err}")
         return
 
-    settings_path = target_extract_dir / "word" / "settings.xml"
     if not settings_path.exists():
         # Create minimal settings.xml and wire package plumbing
         settings_path.parent.mkdir(parents=True, exist_ok=True)
@@ -541,7 +577,7 @@ def apply_page_layout(target_extract_dir: Path, registry: Dict[str, Any], log: L
         before_sig = _extract_layout_signature(target_sectpr)
         merged = _merge_managed_layout_tags(target_sectpr, source_sectpr)
         after_sig = _extract_layout_signature(merged)
-        updated_xml = updated_xml.replace(target_sectpr, merged, 1)
+        updated_xml = replace_nth_sectpr_block(updated_xml, idx, merged)
         log.append(f"Patched sectPr[{idx}] layout signature: {before_sig} -> {after_sig}")
 
     doc_path.write_text(updated_xml, encoding="utf-8")
@@ -555,6 +591,7 @@ def apply_environment_to_target(
     apply_doc_defaults_flag: bool = True,
     apply_fonts_flag: bool = True,
     apply_headers_footers_flag: bool = True,
+    registry_dir: Optional[Path] = None,
 ) -> Dict[str, Any]:
     """
     Apply the formatting environment from arch_template_registry to target.
@@ -589,7 +626,7 @@ def apply_environment_to_target(
     # 2. Settings/compat
     if apply_settings_flag:
         log.append("\n[2/6] Applying settings/compat...")
-        apply_settings(target_extract_dir, registry, log)
+        apply_settings(target_extract_dir, registry, log, registry_dir=registry_dir)
     else:
         log.append("\n[2/6] Settings application skipped")
     

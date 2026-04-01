@@ -649,5 +649,5 @@ def _style_has_replacement_ppr(style_block_xml: str) -> bool:
         return False
     return any(
         tag in style_block_xml
-        for tag in ("<w:spacing", "<w:ind", "<w:jc", "<w:numPr", "<w:tabs", "<w:outlineLvl")
+        for tag in ("<w:spacing", "<w:ind", "<w:jc", "<w:numPr")
     )
