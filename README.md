@@ -10,55 +10,13 @@ This phase does not design styles. It consumes styles produced by Phase 1 and ap
 
 ## Quick Start
 
-### Automated Pipeline (Recommended)
-
-```bash
-python docx_decomposer.py target.docx \
-  --phase2-arch-extract NVES_extracted/ \
-  --classify \
-  --api-key YOUR_API_KEY
-```
-
-This runs the full pipeline: extract → build bundle → LLM classify → apply → format.
-
-### GUI
+### GUI (Primary Interface)
 
 ```bash
 python gui.py
 ```
 
-The GUI provides file/folder pickers, batch processing, and real-time progress logging. Batch mode can process files concurrently with configurable workers.
-
-### Manual Pipeline (Two-Step)
-
-**Step 1: Build LLM input bundle**
-```bash
-python docx_decomposer.py target.docx \
-  --phase2-arch-extract NVES_extracted/ \
-  --phase2-build-bundle
-```
-
-**Step 2: Apply LLM classifications**
-```bash
-python docx_decomposer.py target.docx \
-  --phase2-arch-extract NVES_extracted/ \
-  --phase2-classifications phase2_classifications.json \
-  --output-docx output.docx
-```
-
-### CLI Flags
-
-| Flag | Description |
-|------|-------------|
-| `--phase2-arch-extract DIR` | Architect extracted template folder |
-| `--phase2-build-bundle` | Build slim bundle for manual LLM classification |
-| `--phase2-classifications JSON` | Apply pre-computed LLM classifications |
-| `--classify` | Run full automated pipeline (requires API key) |
-| `--api-key KEY` | Anthropic API key (or set `ANTHROPIC_API_KEY` env var) |
-| `--model MODEL` | LLM model (default: `claude-sonnet-4-20250514`) |
-| `--output-docx PATH` | Output DOCX path |
-| `--use-extract-dir DIR` | Reuse existing extracted folder |
-| `--extract-dir DIR` | Specify extraction location |
+The GUI provides file/folder pickers, batch processing, and real-time progress logging. Batch mode supports concurrent processing (configurable workers) or the Anthropic Batch API for large folder runs. Set your Anthropic API key, point it at the architect extracted folder, select a target spec or folder, and click Run.
 
 ## Installation
 
@@ -66,7 +24,7 @@ python docx_decomposer.py target.docx \
 pip install -r requirements.txt
 ```
 
-Runtime dependency: `anthropic==0.84.0` (for automated classification, pinned with all transitive dependencies).
+Runtime dependencies: `anthropic==0.84.0` and `customtkinter==5.2.2` (pinned with all transitive dependencies).
 
 For development:
 ```bash

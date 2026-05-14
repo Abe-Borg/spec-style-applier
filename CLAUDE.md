@@ -12,36 +12,55 @@ Phase 1 (external, not in this repo) extracts and catalogs styles from an archit
 
 ```
 spec-style-applier/
-├── docx_decomposer.py        # CLI entry point + DocxDecomposer class (~440 lines)
-├── arch_env_applier.py        # Formatting environment, style materialization, Content-Types/rels provisioning (~800 lines)
-├── numbering_importer.py      # Numbering definition import with collision avoidance (~360 lines)
-├── docx_patch.py              # Surgical ZIP patching with XML well-formedness validation (~115 lines)
-├── phase2_invariants.py       # Post-processing invariant verification (118 lines)
-├── gui.py                     # Tkinter GUI with batch mode (~460 lines)
-├── core/                      # Core logic package
-│   ├── __init__.py            # Re-exports public interface
-│   ├── xml_helpers.py         # Paragraph XML iteration and manipulation
-│   ├── stability.py           # Stability snapshots and verification
-│   ├── style_import.py        # Style extraction, materialization, and import
-│   ├── classification.py      # Classification application, slim bundle, boilerplate, prompts
-│   ├── registry.py            # Registry loading, resolve, preflight
-│   └── llm_classifier.py      # Anthropic API integration for automated classification
-├── tests/                     # Unit tests (pytest)
-│   ├── test_xml_helpers.py    # Tests for XML manipulation functions
-│   ├── test_style_import.py   # Tests for style import and materialization
-│   ├── test_env_applier.py    # Tests for environment application and style materialization
-│   ├── test_registry.py       # Tests for registry loading and preflight validation
-│   ├── test_numbering_importer.py # Tests for numbering import and ID collision avoidance
-│   ├── test_preflight.py      # Tests for preflight reporting
-│   ├── test_classification.py # Tests for classification and boilerplate filtering
-│   ├── test_docx_patch.py     # Tests for DOCX patching and XML validation
-│   └── test_normalize_contract.py # Tests for paragraph normalization contract
-├── requirements.txt           # Full pinned dependencies (anthropic==0.84.0 + transitive deps)
-├── requirements-build.txt     # PyInstaller packaging dependencies
-├── requirements-dev.txt       # Development: pytest>=7.0
-├── README.md                  # Technical documentation
-├── CLAUDE.md                  # This file
-├── .gitignore                 # Standard Python + project-specific ignores
+├── docx_decomposer.py        # DocxDecomposer class — DOCX extraction only (~70 lines)
+├── batch_runner.py           # Pipeline orchestrator: single-file and batch processing
+├── arch_env_applier.py       # Formatting environment, style materialization, Content-Types/rels provisioning
+├── header_footer_importer.py # Header/footer import from architect template
+├── numbering_importer.py     # Numbering definition import with collision avoidance
+├── docx_patch.py             # Surgical ZIP patching with XML well-formedness validation
+├── phase2_invariants.py      # Post-processing invariant verification
+├── gui.py                    # customtkinter GUI with single-file and batch modes
+├── core/                     # Core logic package
+│   ├── __init__.py           # Re-exports public interface
+│   ├── xml_helpers.py        # Paragraph XML iteration and manipulation
+│   ├── stability.py          # Stability snapshots and verification
+│   ├── style_import.py       # Style extraction, materialization, and import
+│   ├── classification.py     # Classification application, slim bundle, boilerplate, prompts
+│   ├── registry.py           # Registry loading, resolve, preflight
+│   ├── llm_classifier.py     # Anthropic API integration for automated classification
+│   ├── batch_classifier.py   # Anthropic Batch API helpers for folder-level classification
+│   ├── token_utils.py        # SectionID/SectionTitle token extraction and case utilities
+│   ├── ooxml_namespaces.py   # OOXML namespace constants and ElementTree serialization helpers
+│   ├── section_mapping.py    # Section source selection for sectPr alignment
+│   ├── sectpr_tools.py       # sectPr block extraction, child ordering, and tag manipulation
+│   └── prompts/              # LLM prompt text files (phase2_master_prompt.txt, phase2_run_instruction.txt)
+├── tests/                    # Unit tests (pytest)
+│   ├── test_xml_helpers.py
+│   ├── test_style_import.py
+│   ├── test_env_applier.py
+│   ├── test_registry.py
+│   ├── test_numbering_importer.py
+│   ├── test_preflight.py
+│   ├── test_classification.py
+│   ├── test_docx_patch.py
+│   ├── test_normalize_contract.py
+│   ├── test_batch_classifier.py
+│   ├── test_batch_runner.py
+│   ├── test_boilerplate_patterns.py
+│   ├── test_header_footer_importer.py
+│   ├── test_llm_classifier.py
+│   ├── test_numpr_cascade.py
+│   ├── test_page_layout_sync.py
+│   ├── test_phase2_application_reporting.py
+│   ├── test_phase2_bundle_and_validation.py
+│   └── test_section_mapping.py
+├── requirements.txt          # Full pinned dependencies (anthropic + customtkinter + transitive deps)
+├── requirements-build.txt    # PyInstaller packaging dependencies
+├── requirements-dev.txt      # Development: pytest>=7.0
+├── DESIGN_SYSTEM.md          # GUI design system reference
+├── README.md                 # Technical documentation
+├── CLAUDE.md                 # This file
+├── .gitignore                # Standard Python + project-specific ignores
 └── phase2_classifications.json # Example LLM classification output
 ```
 
@@ -49,52 +68,21 @@ spec-style-applier/
 
 - **Python 3.7+** — all source code
 - **Standard library** for core functionality: `zipfile`, `re`, `json`, `pathlib`, `hashlib`, `dataclasses`
-- **anthropic==0.84.0** — sole external runtime dependency (for automated LLM classification)
+- **anthropic==0.84.0** — external runtime dependency (for automated LLM classification)
+- **customtkinter==5.2.2** — external runtime dependency (GUI)
 - **No external XML libraries** — regex-based XML manipulation for byte-level fidelity
 - **pytest** — development dependency for unit tests
-- **tkinter** — GUI (stdlib, no extra install)
 
 ## How to Run
 
-### Automated Pipeline (Recommended)
-```bash
-python docx_decomposer.py <target.docx> \
-  --phase2-arch-extract <arch_extracted_folder> \
-  --classify \
-  --api-key <YOUR_API_KEY>
-```
-
-### GUI
+### GUI (primary interface)
 ```bash
 python gui.py
 ```
 
-### Manual Pipeline
-**Step 1: Build LLM input bundle**
-```bash
-python docx_decomposer.py <target.docx> \
-  --phase2-arch-extract <arch_extracted_folder> \
-  --phase2-build-bundle
-```
+The pipeline has no standalone CLI. All user-facing processing (single-file and batch) is launched from the GUI. Programmatic callers should use `batch_runner.process_single_file()` or `batch_runner.run_batch_concurrent()` / `run_batch_api()` directly.
 
-**Step 2: Apply LLM classifications**
-```bash
-python docx_decomposer.py <target.docx> \
-  --phase2-arch-extract <arch_extracted_folder> \
-  --phase2-classifications <phase2_classifications.json> \
-  [--output-docx <output.docx>]
-```
-
-### CLI Flags
-- `--classify` — run full automated pipeline (extract → classify → apply → format)
-- `--api-key KEY` — Anthropic API key (or set `ANTHROPIC_API_KEY` env var)
-- `--model MODEL` — LLM model (default: `claude-sonnet-4-20250514`)
-- `--phase2-build-bundle` — build slim bundle only (manual LLM step)
-- `--phase2-classifications JSON` — apply pre-computed classifications
-- `--phase2-arch-extract DIR` — architect extracted folder
-- `--output-docx PATH` — output DOCX path
-- `--use-extract-dir DIR` — reuse existing extracted folder
-- `--extract-dir DIR` — specify extraction location
+Default model: `claude-opus-4-6`
 
 ### Running Tests
 ```bash
@@ -104,45 +92,46 @@ python -m pytest tests/ -v
 ## Architecture and Data Flow
 
 ```
-INPUT: target.docx + arch_template_registry.json [+ API key for --classify]
+INPUT: target.docx + arch_template_registry.json + arch_style_registry.json + API key
   │
-  ├─→ Extract DOCX to folder (DocxDecomposer.extract)  [docx_decomposer.py]
+  ├─→ load_and_validate_shared_config()                 [batch_runner.py]
+  │   └─→ preflight_validate_registries()               [core/registry.py]
   │
-  ├─→ apply_environment_to_target()                     [arch_env_applier.py]
-  │   ├─→ apply_theme()                                 theme/theme1.xml
-  │   ├─→ apply_settings()                              compat flags
-  │   ├─→ apply_font_table()                            fontTable.xml
-  │   └─→ apply_doc_defaults()                          baseline rPr/pPr
-  │
-  ├─→ import_numbering()                                [numbering_importer.py]
-  │   ├─→ find_max_ids_in_numbering()                   collision detection
-  │   ├─→ build_numbering_import_plan()                 remapping strategy
-  │   └─→ inject_numbering_into_xml()                   merge abstractNums + nums
-  │
-  ├─→ import_arch_styles_into_target()                  [core/style_import.py]
-  │   ├─→ _collect_style_deps_from_arch()               expand basedOn chain
-  │   ├─→ materialize_arch_style_block()                harden for portability
-  │   └─→ insert_styles_into_styles_xml()               merge into target
-  │
-  ├─→ build_phase2_slim_bundle()                        [core/classification.py]
-  │   └─→ strip_boilerplate_with_report()               filter noise
-  │
-  ├─→ classify_target_document()                        [core/llm_classifier.py]
-  │   ├─→ Anthropic API call (with chunking + retry)
-  │   └─→ Coverage check (warn if < 85%)
-  │
-  ├─→ snapshot_stability()                              [core/stability.py]
-  │
-  ├─→ apply_phase2_classifications()                    [core/classification.py]
-  │   ├─→ ensure_explicit_numpr_from_current_style()    [core/style_import.py]
-  │   ├─→ strip_run_font_formatting()                   [core/xml_helpers.py]
-  │   └─→ apply_pstyle_to_paragraph_block()             [core/xml_helpers.py]
-  │
-  ├─→ verify_stability()                                [core/stability.py]
-  │
-  ├─→ patch_docx()                                      [docx_patch.py]
-  │
-  └─→ verify_phase2_invariants()                        [phase2_invariants.py]
+  ├─→ process_single_file() / run_batch_concurrent()    [batch_runner.py]
+  │   │   (batch uses ThreadPoolExecutor; Batch API path uses run_batch_api())
+  │   │
+  │   ├─→ DocxDecomposer.extract()                      [docx_decomposer.py]
+  │   │
+  │   ├─→ apply_environment_to_target()                 [arch_env_applier.py]
+  │   │   ├─→ apply_theme()                             theme/theme1.xml
+  │   │   ├─→ apply_settings()                          compat flags
+  │   │   ├─→ apply_font_table()                        fontTable.xml
+  │   │   └─→ apply_doc_defaults()                      baseline rPr/pPr
+  │   │
+  │   ├─→ patch_footer_tokens()                         [header_footer_importer.py]
+  │   │   └─→ imports architect headers/footers + media into extract dir
+  │   │
+  │   ├─→ import_numbering()                            [numbering_importer.py]
+  │   │
+  │   ├─→ import_arch_styles_into_target()              [core/style_import.py]
+  │   │
+  │   ├─→ build_phase2_slim_bundle()                    [core/classification.py]
+  │   │   └─→ strip_boilerplate_with_report()           filter noise
+  │   │
+  │   ├─→ classify_target_document()                    [core/llm_classifier.py]
+  │   │   ├─→ Anthropic API call (chunking + retry)
+  │   │   └─→ Coverage check (warn if < 85%)
+  │   │
+  │   ├─→ snapshot_stability()                          [core/stability.py]
+  │   │
+  │   ├─→ apply_phase2_classifications()                [core/classification.py]
+  │   │
+  │   ├─→ verify_stability()                            [core/stability.py]
+  │   │
+  │   ├─→ _build_and_patch_output()                     [batch_runner.py]
+  │   │   └─→ patch_docx()                              [docx_patch.py]
+  │   │
+  │   └─→ verify_phase2_invariants()                    [phase2_invariants.py]
 
 OUTPUT: <target>_PHASE2_FORMATTED.docx
 ```
@@ -151,18 +140,25 @@ OUTPUT: <target>_PHASE2_FORMATTED.docx
 
 | Module | Role |
 |---|---|
-| `docx_decomposer.py` | CLI entry point, orchestrator, DOCX extraction (`DocxDecomposer` class) |
+| `batch_runner.py` | Pipeline orchestrator: config loading, per-file processing, concurrent batch and Batch API runners |
+| `docx_decomposer.py` | `DocxDecomposer` class — DOCX ZIP extraction only |
+| `header_footer_importer.py` | Imports architect headers/footers (XML + media + rels) into the target extract directory |
+| `arch_env_applier.py` | Imports formatting environment (theme, settings, fonts, docDefaults), Content-Types/rels provisioning, effective rPr resolution, style materialization for import |
+| `numbering_importer.py` | Imports numbering definitions (abstractNum + num) with ID collision avoidance |
+| `docx_patch.py` | Creates output DOCX via surgical ZIP entry replacement with XML well-formedness validation |
+| `phase2_invariants.py` | Post-processing validation: sectPr, headers/footers, run properties |
+| `gui.py` | customtkinter GUI with single-file and batch processing modes |
 | `core/xml_helpers.py` | Paragraph XML iteration, text extraction, pStyle application, run font stripping |
 | `core/stability.py` | SHA256 snapshots, header/footer/sectPr/rels stability verification |
 | `core/style_import.py` | Style extraction, basedOn chain walking, property materialization, style import |
 | `core/classification.py` | LLM prompts, boilerplate filtering, slim bundle building, classification application |
 | `core/registry.py` | Architect registry loading, preflight reporting, path resolution |
 | `core/llm_classifier.py` | Anthropic API integration (streaming), retry logic, chunking, coverage metrics |
-| `arch_env_applier.py` | Imports formatting environment (theme, settings, fonts, docDefaults), Content-Types/rels provisioning, effective rPr resolution, style materialization for import |
-| `numbering_importer.py` | Imports numbering definitions (abstractNum + num) with ID collision avoidance |
-| `docx_patch.py` | Creates output DOCX via surgical ZIP entry replacement with XML well-formedness validation |
-| `phase2_invariants.py` | Post-processing validation: sectPr, headers/footers, run properties |
-| `gui.py` | Tkinter GUI with single-file and batch processing modes |
+| `core/batch_classifier.py` | Anthropic Batch API: request building, polling, result reassembly |
+| `core/token_utils.py` | SectionID/SectionTitle token extraction and smart title-case utilities |
+| `core/ooxml_namespaces.py` | OOXML namespace constants and ElementTree serialization helpers |
+| `core/section_mapping.py` | Maps architect sectPr chain to target section count |
+| `core/sectpr_tools.py` | sectPr block extraction, canonical child ordering, and tag-level manipulation |
 
 ## Key Conventions and Patterns
 
@@ -195,7 +191,7 @@ Before and after document.xml modifications, SHA256 hashes of headers/footers an
 
 ## Hard Invariants (Must Never Break)
 
-1. **Headers/footers unchanged** — no XML drift, no relationship changes
+1. **Headers/footers** — the target document's original headers/footers are replaced wholesale by the architect's headers/footers via `header_footer_importer.py`. After that replacement, no further drift is permitted.
 2. **`w:sectPr` untouched** — no page setup or section break changes
 3. **Numbering definitions untouched** — `numbering.xml` is never edited by style application; only the numbering importer adds new definitions
 4. **No run-level formatting** — no `<w:rPr>` edits inside document.xml (except font stripping); all formatting through paragraph styles only
@@ -245,13 +241,13 @@ Mix of try/except and explicit validation. Errors are logged into `log: List[str
 ### Imports
 - Standard library imports first, then local module imports
 - `numbering_importer` is imported conditionally with a `HAS_NUMBERING_IMPORTER` flag fallback
-- Core logic lives in `core/` package; `docx_decomposer.py` imports from it
+- Core logic lives in `core/` package; `batch_runner.py` imports from it and from the top-level modules
 
 ## What NOT to Do
 
 - **Do not use DOM/ElementTree for modifying Word XML** — the codebase intentionally uses regex to preserve byte-level fidelity
 - **Do not create styles** — Phase 2 only applies styles defined in the architect registry
-- **Do not modify headers, footers, or sectPr** — these are protected by hard invariants
+- **Do not modify headers, footers, or sectPr outside the designated import steps** — headers/footers are replaced by `header_footer_importer.py` during environment application, and sectPr is managed by `sectpr_tools.py`; do not touch them elsewhere
 - **Do not apply run-level formatting** — all formatting is through `w:pStyle` only
 - **Do not infer or guess style IDs** — if a role is missing from the registry, skip it
 - **Do not modify `numbering.xml` during style application** — numbering preservation happens at the paragraph level via `<w:numPr>` materialization
@@ -261,7 +257,7 @@ Mix of try/except and explicit validation. Errors are logged into `log: List[str
 
 ## Allowed Patch Targets (docx_patch.py)
 
-Only these ZIP entries may be modified in the output DOCX:
+Core ZIP entries replaced in the output DOCX:
 - `word/document.xml`
 - `word/styles.xml`
 - `word/theme/theme1.xml`
@@ -271,7 +267,7 @@ Only these ZIP entries may be modified in the output DOCX:
 - `[Content_Types].xml`
 - `word/_rels/document.xml.rels`
 
-Headers (`word/header*`) and footers (`word/footer*`) are **explicitly forbidden** from patching.
+When `header_footer_importer.py` runs, the architect's header/footer parts, their `.rels` files, and any embedded media are also added to the replacement set. The target document's original header/footer entries are excluded from the output. Style application code must not touch headers or footers independently.
 
 ## Known Failure Modes
 
